@@ -1,0 +1,25 @@
+[package]
+name = "dhat"
+version = "0.1.0" # remember to update html_root_url
+authors = ["Nicholas Nethercote <nnethercote@mozilla.com>"]
+license = "MIT OR Apache-2.0"
+edition = "2018"
+description = "A library for heap profiling and ad hoc profiling with DHAT."
+readme = "README.md"
+homepage = "https://github.com/nnethercote/counts"
+repository = "https://github.com/nnethercote/counts"
+keywords = ["profiling"]
+categories = ["development-tools::profiling"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+backtrace = "0.3.50"
+fxhash = "0.2"
+lazy_static = "1.4"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thousands = "0.2"
+
+[dev-dependencies]
+serial_test = "0.5"
