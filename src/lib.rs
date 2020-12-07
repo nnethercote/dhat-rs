@@ -440,7 +440,7 @@ fn finish(_dhat: &mut Dhat) -> Option<Globals> {
                                 .filename()
                                 .and_then(|path| path.file_name())
                                 .and_then(|file_name| file_name.to_str())
-                                .unwrap_or_else(|| "???"),
+                                .unwrap_or("???"),
                             symbol.lineno().unwrap_or(0),
                             symbol.colno().unwrap_or(0),
                         );
