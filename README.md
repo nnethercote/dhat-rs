@@ -1,4 +1,4 @@
-# `dhat`
+# dhat
 
 This crate provides heap profiling and ad hoc profiling capabilities to Rust
 programs, similar to those provided by [DHAT].
