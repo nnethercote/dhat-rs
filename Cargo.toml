@@ -6,8 +6,8 @@ license = "MIT OR Apache-2.0"
 edition = "2018"
 description = "A library for heap profiling and ad hoc profiling with DHAT."
 readme = "README.md"
-homepage = "https://github.com/nnethercote/counts"
-repository = "https://github.com/nnethercote/counts"
+homepage = "https://github.com/nnethercote/dhat-rs"
+repository = "https://github.com/nnethercote/dhat-rs"
 keywords = ["profiling"]
 categories = ["development-tools::profiling"]
 
