@@ -5,23 +5,9 @@ programs, similar to those provided by [DHAT].
 
 [DHAT]: https://www.valgrind.org/docs/manual/dh-manual.html
 
-## A minimal heap profiling example
+See the [crate documentation] for details on how to use it.
 
-When the following program terminates, it will print a `dhat-heap.json` file
-that can be viewed with DHAT's viewer.
-```
-use dhat::{Dhat, DhatAlloc};
-
-#[global_allocator]
-static ALLOC: DhatAlloc = DhatAlloc;
-
-fn main() {
-    let _dhat = Dhat::start_heap_profiling();
-    println!("Hello, world!");
-}
-```
-
-The crate's documentation has more details.
+[crate documentation]: https://docs.rs/dhat-rs
 
 ## License
 
