@@ -163,8 +163,6 @@
 //! frame may be a function within `alloc::alloc`, a function within this
 //! crate, or a global allocation function like `__rg_alloc`.
 
-#![doc(html_root_url = "https://docs.rs/dhat/0.1.0")]
-
 use backtrace::SymbolName;
 use fxhash::FxHashMap;
 use lazy_static::lazy_static;
