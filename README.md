@@ -7,7 +7,7 @@ programs, similar to those provided by [DHAT].
 
 See the [crate documentation] for details on how to use it.
 
-[crate documentation]: https://docs.rs/dhat-rs
+[crate documentation]: https://docs.rs/dhat
 
 ## License
 
