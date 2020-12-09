@@ -525,12 +525,13 @@ fn finish(_dhat: &mut Dhat) -> Option<Globals> {
         } else {
             "dhat-ad-hoc.json"
         });
-        let file = File::create(filename.unwrap())?;
+        let filename = filename.unwrap();
+        let file = File::create(filename)?;
         serde_json::to_writer_pretty(&file, &json)?;
 
         eprintln!(
             "dhat: The data in {} is viewable with dhat/dh_view.html",
-            filename.unwrap()
+            filename
         );
 
         Ok(Some(g))
@@ -542,8 +543,7 @@ fn finish(_dhat: &mut Dhat) -> Option<Globals> {
     let r = r.unwrap();
 
     match r {
-        Ok(Some(g)) => Some(g),
-        Ok(None) => None,
+        Ok(globals) => globals,
         Err(e) => {
             eprintln!(
                 "dhat: error: Writing to {} failed: {}",
@@ -575,15 +575,22 @@ where
 {
     thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
 
-    IGNORE_ALLOCS.with(|b| {
-        if !b.replace(true) {
-            let r = f();
-            b.set(false);
-            Some(r)
-        } else {
-            None
+    /// If `F` panics, then `ResetOnDrop` will still reset `IGNORE_ALLOCS`
+    /// so that it can be used again.
+    struct ResetOnDrop;
+
+    impl Drop for ResetOnDrop {
+        fn drop(&mut self) {
+            IGNORE_ALLOCS.with(|b| b.set(false));
         }
-    })
+    }
+
+    if IGNORE_ALLOCS.with(|b| !b.replace(true)) {
+        let _reset_on_drop = ResetOnDrop;
+        Some(f())
+    } else {
+        None
+    }
 }
 
 // The top frames in a backtrace vary significantly (depending on build
@@ -723,16 +730,13 @@ impl Globals {
     }
 
     // Get the PpInfo for this backtrace, creating it if necessary.
-    fn get_pp_info(&mut self, bt: Backtrace, new: fn() -> PpInfo) -> usize {
-        if let Some(&idx) = self.backtraces.get(&bt) {
-            idx
-        } else {
-            let pp_info_idx = self.pp_infos.len();
-            self.pp_infos.push(new());
-            let old = self.backtraces.insert(bt, pp_info_idx);
-            assert_eq!(old, None);
+    fn get_pp_info<F: FnOnce() -> PpInfo>(&mut self, bt: Backtrace, new: F) -> usize {
+        let pp_infos = &mut self.pp_infos;
+        *self.backtraces.entry(bt).or_insert_with(|| {
+            let pp_info_idx = pp_infos.len();
+            pp_infos.push(new());
             pp_info_idx
-        }
+        })
     }
 
     fn update_counts_for_alloc(&mut self, size: usize, now: Instant) {
