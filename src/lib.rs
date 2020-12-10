@@ -29,6 +29,9 @@
 //!   and `strcpy`, unlike DHAT.
 //! - The backtraces produced by this crate may be better than those produced
 //!   by DHAT.
+//! - DHAT measures a program's entire execution, but this crate only measures
+//!   what happens within the scope of `main`. It will miss the small number of
+//!   allocations that occur before or after `main`, within the Rust runtime.
 //!
 //! # Prerequisites
 //!
