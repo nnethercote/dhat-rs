@@ -30,6 +30,18 @@
 //! - The backtraces produced by this crate may be better than those produced
 //!   by DHAT.
 //!
+//! # Prerequisites
+//!
+//! Obtain a copy of DHAT's viewer by getting the Valgrind source code, version
+//! 3.17 or later. At the time of writing, this version is unreleased and must
+//! be obtained from the [Valgrind repository], like so:
+//! ```
+//! git clone git://sourceware.org/git/valgrind.git
+//! ```
+//! There is no need to build any code in this repository.
+//!
+//! [Valgrind repository]: https://www.valgrind.org/downloads/repository.html
+//!
 //! # Configuration
 //!
 //! In your `Cargo.toml` file, as well as specifying `dhat` as a dependency,
@@ -100,12 +112,9 @@
 //!
 //! # Viewing
 //!
-//! Open DHAT's viewer (`dhat/dh_view.html`) in a web browser, and click on the
-//! "Load…" button to load `dhat-heap.json` or `dhat-ad-hoc.json`. Note that
-//! you must be using DHAT from Valgrind 3.17 or later. At the time of writing,
-//! it is unreleased and must be [obtained] from the Valgrind repository.
-//!
-//! [obtained]: https://www.valgrind.org/downloads/repository.html
+//! Open DHAT's viewer (`dhat/dh_view.html` within the Valgrind source code) in
+//! a web browser, and click on the "Load…" button to load `dhat-heap.json` or
+//! `dhat-ad-hoc.json`.
 //!
 //! DHAT's viewer shows a tree with nodes that look like this.
 //! ```text
