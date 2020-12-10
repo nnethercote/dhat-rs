@@ -38,7 +38,7 @@
 //! Obtain a copy of DHAT's viewer by getting the Valgrind source code, version
 //! 3.17 or later. At the time of writing, this version is unreleased and must
 //! be obtained from the [Valgrind repository], like so:
-//! ```
+//! ```text
 //! git clone git://sourceware.org/git/valgrind.git
 //! ```
 //! There is no need to build any code in this repository.
