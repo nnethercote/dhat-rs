@@ -194,7 +194,7 @@ use thousands::Separable;
 /// file. Only one value of this type should be created; if subsequent values
 /// of this type are created they will have no effect.
 #[derive(Debug)]
-pub struct Dhat;
+pub struct Dhat(());
 
 impl Dhat {
     /// Initiate allocation profiling. This should be the first thing in
@@ -223,7 +223,7 @@ impl Dhat {
         } else {
             eprintln!("dhat: error: A second `Dhat` object was initialized");
         }
-        Dhat
+        Dhat(())
     }
 }
 
