@@ -736,15 +736,12 @@ impl Globals {
 
     // Get the PpInfo for this backtrace, creating it if necessary.
     fn get_pp_info(&mut self, bt: Backtrace, new: fn() -> PpInfo) -> usize {
-        if let Some(&idx) = self.backtraces.get(&bt) {
-            idx
-        } else {
-            let pp_info_idx = self.pp_infos.len();
-            self.pp_infos.push(new());
-            let old = self.backtraces.insert(bt, pp_info_idx);
-            assert_eq!(old, None);
+        let info = &mut self.pp_infos;
+        *self.backtraces.entry(bt).or_insert_with(|| {
+            let pp_info_idx = info.len();
+            info.push(new());
             pp_info_idx
-        }
+        })
     }
 
     fn update_counts_for_alloc(&mut self, size: usize, now: Instant) {
