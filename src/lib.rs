@@ -113,6 +113,11 @@
 //! A file called `dhat-heap.json` (for heap profiling) or `dhat-ad-hoc.json`
 //! (for ad hoc profiling) will be written. It can be viewed in DHAT's viewer.
 //!
+//! If you don't see this output, it may be because your program called
+//! `std::process::exit`, which terminates a program without running any
+//! destructors. To work around this, explicitly call `drop` on the `Dhat`
+//! value just before the call to `std::process:exit`.
+//!
 //! # Viewing
 //!
 //! Open DHAT's viewer (`dhat/dh_view.html` within the Valgrind source code) in
