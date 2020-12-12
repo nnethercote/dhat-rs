@@ -167,8 +167,8 @@
 //! - Common frames at the bottom of backtraces, below `main`, are omitted.
 
 use backtrace::SymbolName;
-use fxhash::FxHashMap;
 use lazy_static::lazy_static;
+use rustc_hash::FxHashMap;
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
