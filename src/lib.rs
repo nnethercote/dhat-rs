@@ -210,22 +210,24 @@ impl Dhat {
     }
 
     fn start_impl(is_heap: bool) -> Self {
-        ignore_allocs(|| {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-            if let Tri::Pre = tri {
-                let h = if is_heap {
-                    Some(HeapGlobals::new())
+        if_ignoring_allocs_else(
+            || panic!("start_impl"),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                if let Tri::Pre = tri {
+                    let h = if is_heap {
+                        Some(HeapGlobals::new())
+                    } else {
+                        None
+                    };
+                    *tri = Tri::During(Globals::new(h));
                 } else {
-                    None
-                };
-                *tri = Tri::During(Globals::new(h));
-            } else {
-                eprintln!("dhat: error: A second `Dhat` object was initialized");
-            }
-            let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
-            Dhat { start_bt }
-        })
-        .unwrap()
+                    eprintln!("dhat: error: A second `Dhat` object was initialized");
+                }
+                let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
+                Dhat { start_bt }
+            },
+        )
     }
 }
 
@@ -242,114 +244,122 @@ pub struct DhatAlloc;
 
 unsafe impl GlobalAlloc for DhatAlloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        let ptr = System.alloc(layout);
-        if ptr.is_null() {
-            return ptr;
-        }
+        if_ignoring_allocs_else(
+            || System.alloc(layout),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let ptr = System.alloc(layout);
+                if ptr.is_null() {
+                    return ptr;
+                }
 
-        ignore_allocs(|| {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-            if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
-                let size = layout.size();
-                let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                    let size = layout.size();
+                    let bt = Backtrace(backtrace::Backtrace::new_unresolved());
 
-                // Get the PpInfo for this backtrace, creating it if necessary.
-                let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
+                    // Get the PpInfo for this backtrace, creating it if
+                    // necessary.
+                    let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
-                // Record the block.
-                let now = Instant::now();
-                let h = g.heap.as_mut().unwrap();
-                let old = h.live_blocks.insert(
-                    ptr as usize,
-                    LiveBlock {
-                        pp_info_idx,
-                        allocation_instant: now,
-                    },
-                );
-                assert!(matches!(old, None));
+                    // Record the block.
+                    let now = Instant::now();
+                    let h = g.heap.as_mut().unwrap();
+                    let old = h.live_blocks.insert(
+                        ptr as usize,
+                        LiveBlock {
+                            pp_info_idx,
+                            allocation_instant: now,
+                        },
+                    );
+                    assert!(matches!(old, None));
 
-                // Update counts.
-                g.pp_infos[pp_info_idx].update_counts_for_alloc(size);
-                g.update_counts_for_alloc(size, now);
-            }
-        });
-
-        ptr
+                    // Update counts.
+                    g.pp_infos[pp_info_idx].update_counts_for_alloc(size);
+                    g.update_counts_for_alloc(size, now);
+                }
+                ptr
+            },
+        )
     }
 
     unsafe fn realloc(&self, old_ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        let new_ptr = System.realloc(old_ptr, layout, new_size);
-        if new_ptr.is_null() {
-            return new_ptr;
-        }
-
-        ignore_allocs(|| {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-            if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
-                let old_size = layout.size();
-                let delta = Delta::new(old_size, new_size);
-
-                if delta.shrinking {
-                    // Total bytes is coming down from a possible peak.
-                    g.check_for_global_peak();
+        if_ignoring_allocs_else(
+            || System.realloc(old_ptr, layout, new_size),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let new_ptr = System.realloc(old_ptr, layout, new_size);
+                if new_ptr.is_null() {
+                    return new_ptr;
                 }
 
-                // Remove the record of the existing live block and get the PpInfo
-                // (which must be present, because we created it if necessary when
-                // this block was allocated.)
-                let h = g.heap.as_mut().unwrap();
-                let LiveBlock {
-                    pp_info_idx,
-                    allocation_instant: _,
-                } = h.live_blocks.remove(&(old_ptr as usize)).unwrap();
+                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                    let old_size = layout.size();
+                    let delta = Delta::new(old_size, new_size);
 
-                // Record the new position of the block.
-                let now = Instant::now();
-                let old = h.live_blocks.insert(
-                    new_ptr as usize,
-                    LiveBlock {
+                    if delta.shrinking {
+                        // Total bytes is coming down from a possible peak.
+                        g.check_for_global_peak();
+                    }
+
+                    // Remove the record of the existing live block and get the
+                    // `PpInfo` (which must be present, because we created it
+                    // if necessary when this block was allocated.)
+                    let h = g.heap.as_mut().unwrap();
+                    let LiveBlock {
                         pp_info_idx,
-                        allocation_instant: now,
-                    },
-                );
-                assert!(matches!(old, None));
+                        allocation_instant: _,
+                    } = h.live_blocks.remove(&(old_ptr as usize)).unwrap();
 
-                // Update counts.
-                g.pp_infos[pp_info_idx].update_counts_for_realloc(new_size, delta);
-                g.update_counts_for_realloc(new_size, delta, now);
-            }
-        });
+                    // Record the new position of the block.
+                    let now = Instant::now();
+                    let old = h.live_blocks.insert(
+                        new_ptr as usize,
+                        LiveBlock {
+                            pp_info_idx,
+                            allocation_instant: now,
+                        },
+                    );
+                    assert!(matches!(old, None));
 
-        new_ptr
+                    // Update counts.
+                    g.pp_infos[pp_info_idx].update_counts_for_realloc(new_size, delta);
+                    g.update_counts_for_realloc(new_size, delta, now);
+                }
+                new_ptr
+            },
+        )
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        System.dealloc(ptr, layout);
+        if_ignoring_allocs_else(
+            || System.dealloc(ptr, layout),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                System.dealloc(ptr, layout);
 
-        ignore_allocs(|| {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-            if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
-                let size = layout.size();
+                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                    let size = layout.size();
 
-                // Remove the record of the live block and get the PpInfo. (If
-                // it's not in the live block table, it must have been
-                // allocated before `TRI_GLOBALS` was set up.)
-                let h = g.heap.as_mut().unwrap();
-                if let Some(LiveBlock {
-                    pp_info_idx,
-                    allocation_instant,
-                }) = h.live_blocks.remove(&(ptr as usize))
-                {
-                    // Total bytes is coming down from a possible peak.
-                    g.check_for_global_peak();
+                    // Remove the record of the live block and get the PpInfo.
+                    // (If it's not in the live block table, it must have been
+                    // allocated before `TRI_GLOBALS` was set up.)
+                    let h = g.heap.as_mut().unwrap();
+                    if let Some(LiveBlock {
+                        pp_info_idx,
+                        allocation_instant,
+                    }) = h.live_blocks.remove(&(ptr as usize))
+                    {
+                        // Total bytes is coming down from a possible peak.
+                        g.check_for_global_peak();
 
-                    // Update counts.
-                    let alloc_duration = allocation_instant.elapsed();
-                    g.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
-                    g.update_counts_for_dealloc(size);
+                        // Update counts.
+                        let alloc_duration = allocation_instant.elapsed();
+                        g.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
+                        g.update_counts_for_dealloc(size);
+                    }
                 }
-            }
-        });
+            },
+        );
     }
 }
 
@@ -357,18 +367,21 @@ unsafe impl GlobalAlloc for DhatAlloc {
 /// value that was created with `Dhat::start_ad_hoc_profiling` is in scope. The
 /// meaning of the weight argument is determined by the user.
 pub fn ad_hoc_event(weight: usize) {
-    ignore_allocs(|| {
-        let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-        if let Tri::During(g @ Globals { heap: None, .. }) = tri {
-            let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+    if_ignoring_allocs_else(
+        || panic!("ad_hoc_event"),
+        || {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            if let Tri::During(g @ Globals { heap: None, .. }) = tri {
+                let bt = Backtrace(backtrace::Backtrace::new_unresolved());
 
-            let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
+                let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
-            // Update counts.
-            g.pp_infos[pp_info_idx].update_counts_for_ad_hoc_event(weight);
-            g.update_counts_for_ad_hoc_event(weight);
-        }
-    });
+                // Update counts.
+                g.pp_infos[pp_info_idx].update_counts_for_ad_hoc_event(weight);
+                g.update_counts_for_ad_hoc_event(weight);
+            }
+        },
+    );
 }
 
 // Finish tracking allocations and deallocations, print a summary message
@@ -382,184 +395,185 @@ pub fn ad_hoc_event(weight: usize) {
 fn finish(dhat: &mut Dhat) -> Option<Globals> {
     let mut filename = None;
 
-    let r: Option<std::io::Result<Option<Globals>>> = ignore_allocs(|| {
-        let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-        let tri = std::mem::replace(tri, Tri::Post);
-        let mut g = if let Tri::During(g) = tri {
-            g
-        } else {
-            // Don't print an error message because `Dhat::new` will have
-            // already printed one.
-            return Ok(None);
-        };
+    let r: std::io::Result<Option<Globals>> = if_ignoring_allocs_else(
+        || panic!("finish"),
+        || {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri = std::mem::replace(tri, Tri::Post);
+            let mut g = if let Tri::During(g) = tri {
+                g
+            } else {
+                // Don't print an error message because `Dhat::new` will have
+                // already printed one.
+                return Ok(None);
+            };
 
-        let now = Instant::now();
+            let now = Instant::now();
 
-        if g.heap.is_some() {
-            // Total bytes is at a possible peak.
-            g.check_for_global_peak();
+            if g.heap.is_some() {
+                // Total bytes is at a possible peak.
+                g.check_for_global_peak();
 
-            let h = g.heap.as_ref().unwrap();
+                let h = g.heap.as_ref().unwrap();
 
-            // Account for the lifetimes of all remaining live blocks.
-            for &LiveBlock {
-                pp_info_idx,
-                allocation_instant,
-            } in h.live_blocks.values()
-            {
-                g.pp_infos[pp_info_idx]
-                    .heap
-                    .as_mut()
-                    .unwrap()
-                    .total_lifetimes_duration += now.duration_since(allocation_instant);
+                // Account for the lifetimes of all remaining live blocks.
+                for &LiveBlock {
+                    pp_info_idx,
+                    allocation_instant,
+                } in h.live_blocks.values()
+                {
+                    g.pp_infos[pp_info_idx]
+                        .heap
+                        .as_mut()
+                        .unwrap()
+                        .total_lifetimes_duration += now.duration_since(allocation_instant);
+                }
             }
-        }
 
-        // We give each unique frame an index into `ftbl`, starting with 0
-        // for the special frame "[root]".
-        let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
-        ftbl_indices.insert("[root]".to_string(), 0);
-        let mut next_ftbl_idx = 1;
+            // We give each unique frame an index into `ftbl`, starting with 0
+            // for the special frame "[root]".
+            let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
+            ftbl_indices.insert("[root]".to_string(), 0);
+            let mut next_ftbl_idx = 1;
 
-        // Because `g` is being consumed, we can consume `g.backtraces` and
-        // replace it with an empty `FxHashMap`. (This is necessary because we
-        // modify the *keys* here with `resolve`, which isn't allowed with a
-        // non-consuming iterator.)
-        let pps: Vec<_> = std::mem::take(&mut g.backtraces)
-            .into_iter()
-            .map(|(mut bt, pp_info_idx)| {
-                // Do the potentially expensive debug info lookups to get
-                // symbol names, line numbers, etc.
-                bt.0.resolve();
+            // Because `g` is being consumed, we can consume `g.backtraces` and
+            // replace it with an empty `FxHashMap`. (This is necessary because
+            // we modify the *keys* here with `resolve`, which isn't allowed
+            // with a non-consuming iterator.)
+            let pps: Vec<_> = std::mem::take(&mut g.backtraces)
+                .into_iter()
+                .map(|(mut bt, pp_info_idx)| {
+                    // Do the potentially expensive debug info lookups to get
+                    // symbol names, line numbers, etc.
+                    bt.0.resolve();
 
-                let first_symbol_to_show = first_symbol_to_show(&bt);
-                let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &dhat.start_bt);
+                    let first_symbol_to_show = first_symbol_to_show(&bt);
+                    let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &dhat.start_bt);
 
-                // Determine the frame indices for this backtrace. This
-                // involves getting the string for each frame and adding a new
-                // entry to `ftbl_indices` if it hasn't been seen before.
-                let mut fs = vec![];
-                let mut i = 0;
-                'outer: for frame in bt.0.frames().iter() {
-                    for symbol in frame.symbols().iter() {
-                        i += 1;
-                        if (i - 1) < first_symbol_to_show {
-                            continue;
-                        }
-                        let s = format!(
-                            // Use `{:#}` rather than `{}` to print the
-                            // "alternate" form of the symbol name, which omits
-                            // the trailing hash (e.g. `::ha68e4508a38cc95a`).
-                            "{:?}: {:#} ({:#}:{}:{})",
-                            frame.ip(),
-                            symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-                            // We have the full path, but that's typically very
-                            // long and clogs up the output greatly. So just
-                            // use the filename, which is usually good enough.
-                            symbol
-                                .filename()
-                                .and_then(|path| path.file_name())
-                                .and_then(|file_name| file_name.to_str())
-                                .unwrap_or("???"),
-                            symbol.lineno().unwrap_or(0),
-                            symbol.colno().unwrap_or(0),
-                        );
+                    // Determine the frame indices for this backtrace. This
+                    // involves getting the string for each frame and adding a
+                    // new entry to `ftbl_indices` if it hasn't been seen
+                    // before.
+                    let mut fs = vec![];
+                    let mut i = 0;
+                    'outer: for frame in bt.0.frames().iter() {
+                        for symbol in frame.symbols().iter() {
+                            i += 1;
+                            if (i - 1) < first_symbol_to_show {
+                                continue;
+                            }
+                            let s = format!(
+                                // Use `{:#}` rather than `{}` to print the
+                                // "alternate" form of the symbol name, which
+                                // omits the trailing hash (e.g.
+                                // `::ha68e4508a38cc95a`).
+                                "{:?}: {:#} ({:#}:{}:{})",
+                                frame.ip(),
+                                symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
+                                // We have the full path, but that's typically
+                                // very long and clogs up the output greatly.
+                                // So just use the filename, which is usually
+                                // good enough.
+                                symbol
+                                    .filename()
+                                    .and_then(|path| path.file_name())
+                                    .and_then(|file_name| file_name.to_str())
+                                    .unwrap_or("???"),
+                                symbol.lineno().unwrap_or(0),
+                                symbol.colno().unwrap_or(0),
+                            );
 
-                        let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
-                            next_ftbl_idx += 1;
-                            next_ftbl_idx - 1
-                        });
-                        fs.push(ftbl_idx);
+                            let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
+                                next_ftbl_idx += 1;
+                                next_ftbl_idx - 1
+                            });
+                            fs.push(ftbl_idx);
 
-                        if Some(frame.ip()) == last_frame_ip_to_show {
-                            break 'outer;
+                            if Some(frame.ip()) == last_frame_ip_to_show {
+                                break 'outer;
+                            }
                         }
                     }
-                }
 
-                PpInfoJson::new(&g.pp_infos[pp_info_idx], fs)
-            })
-            .collect();
+                    PpInfoJson::new(&g.pp_infos[pp_info_idx], fs)
+                })
+                .collect();
 
-        // We pre-allocate `ftbl` with empty strings, and then fill it in.
-        let mut ftbl = vec![String::new(); ftbl_indices.len()];
-        for (frame, ftbl_idx) in ftbl_indices.into_iter() {
-            ftbl[ftbl_idx] = frame;
-        }
+            // We pre-allocate `ftbl` with empty strings, and then fill it in.
+            let mut ftbl = vec![String::new(); ftbl_indices.len()];
+            for (frame, ftbl_idx) in ftbl_indices.into_iter() {
+                ftbl[ftbl_idx] = frame;
+            }
 
-        let h = g.heap.as_ref();
-        let is_heap = h.is_some();
-        let json = DhatJson {
-            dhatFileVersion: 2,
-            mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
-            verb: "Allocated",
-            bklt: is_heap,
-            bkacc: false,
-            bu: if is_heap { None } else { Some("unit") },
-            bsu: if is_heap { None } else { Some("units") },
-            bksu: if is_heap { None } else { Some("events") },
-            tu: "µs",
-            Mtu: "s",
-            tuth: if is_heap { Some(10) } else { None },
-            cmd: std::env::args().collect::<Vec<_>>().join(" "),
-            pid: std::process::id(),
-            tg: h.map(|h| {
-                h.tgmax_instant
-                    .saturating_duration_since(g.start_instant)
-                    .as_micros()
-            }),
-            te: now.duration_since(g.start_instant).as_micros(),
-            pps,
-            ftbl,
-        };
+            let h = g.heap.as_ref();
+            let is_heap = h.is_some();
+            let json = DhatJson {
+                dhatFileVersion: 2,
+                mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
+                verb: "Allocated",
+                bklt: is_heap,
+                bkacc: false,
+                bu: if is_heap { None } else { Some("unit") },
+                bsu: if is_heap { None } else { Some("units") },
+                bksu: if is_heap { None } else { Some("events") },
+                tu: "µs",
+                Mtu: "s",
+                tuth: if is_heap { Some(10) } else { None },
+                cmd: std::env::args().collect::<Vec<_>>().join(" "),
+                pid: std::process::id(),
+                tg: h.map(|h| {
+                    h.tgmax_instant
+                        .saturating_duration_since(g.start_instant)
+                        .as_micros()
+                }),
+                te: now.duration_since(g.start_instant).as_micros(),
+                pps,
+                ftbl,
+            };
 
-        eprintln!(
-            "dhat: Total:     {} {} in {} {}",
-            g.total_bytes.separate_with_commas(),
-            json.bsu.unwrap_or("bytes"),
-            g.total_blocks.separate_with_commas(),
-            json.bksu.unwrap_or("blocks"),
-        );
-        if let Some(h) = &g.heap {
             eprintln!(
-                "dhat: At t-gmax: {} bytes in {} blocks",
-                h.max_bytes.separate_with_commas(),
-                h.max_blocks.separate_with_commas(),
+                "dhat: Total:     {} {} in {} {}",
+                g.total_bytes.separate_with_commas(),
+                json.bsu.unwrap_or("bytes"),
+                g.total_blocks.separate_with_commas(),
+                json.bksu.unwrap_or("blocks"),
             );
+            if let Some(h) = &g.heap {
+                eprintln!(
+                    "dhat: At t-gmax: {} bytes in {} blocks",
+                    h.max_bytes.separate_with_commas(),
+                    h.max_blocks.separate_with_commas(),
+                );
+                eprintln!(
+                    "dhat: At t-end:  {} bytes in {} blocks",
+                    h.curr_bytes.separate_with_commas(),
+                    h.curr_blocks.separate_with_commas(),
+                );
+            }
+
+            // `to_writer` produces JSON that is compact, and
+            // `to_writer_pretty` produces JSON that is readable. Ideally we'd
+            // have something between the two (e.g. 1-space indents instead of
+            // 2-space, no spaces after `:`, `fs` arrays on a single line) more
+            // like what DHAT produces. But in the absence of such an
+            // intermediate option, readability trumps compactness.
+            filename = Some(if g.heap.is_some() {
+                "dhat-heap.json"
+            } else {
+                "dhat-ad-hoc.json"
+            });
+            let filename = filename.unwrap();
+            let file = File::create(filename)?;
+            serde_json::to_writer_pretty(&file, &json)?;
+
             eprintln!(
-                "dhat: At t-end:  {} bytes in {} blocks",
-                h.curr_bytes.separate_with_commas(),
-                h.curr_blocks.separate_with_commas(),
+                "dhat: The data in {} is viewable with dhat/dh_view.html",
+                filename
             );
-        }
 
-        // `to_writer` produces JSON that is compact, and
-        // `to_writer_pretty` produces JSON that is readable. Ideally we'd
-        // have something between the two (e.g. 1-space indents instead of
-        // 2-space, no spaces after `:`, `fs` arrays on a single line) more
-        // like what DHAT produces. But in the absence of such an intermediate
-        // option, readability trumps compactness.
-        filename = Some(if g.heap.is_some() {
-            "dhat-heap.json"
-        } else {
-            "dhat-ad-hoc.json"
-        });
-        let filename = filename.unwrap();
-        let file = File::create(filename)?;
-        serde_json::to_writer_pretty(&file, &json)?;
-
-        eprintln!(
-            "dhat: The data in {} is viewable with dhat/dh_view.html",
-            filename
-        );
-
-        Ok(Some(g))
-    });
-
-    // If this `unwrap` fails, it means that intercepts were already
-    // blocked. This should never happen because this code isn't reachable
-    // from `DhatAlloc::alloc` or `DhatAlloc::dealloc`.
-    let r = r.unwrap();
+            Ok(Some(g))
+        },
+    );
 
     match r {
         Ok(globals) => globals,
@@ -581,16 +595,14 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
 // would be intercepted and trigger additional allocations, and so on, leading
 // to infinite loops.
 //
-// This function runs `f` such that any allocations within `f` are ignored...
-// unless we are already ignoring allocations, in which case `f` is skipped.
-// return value is `Some(r)` if `f` was run, where `r` is the result of `f`,
-// and `None` otherwise.
+// This function runs `f1` if we are ignoring allocations, and `f2` otherwise.
 //
 // WARNING: This function must be used for any code within this crate that can
 // trigger allocations.
-fn ignore_allocs<F, R>(f: F) -> Option<R>
+fn if_ignoring_allocs_else<F1, F2, R>(f1: F1, f2: F2) -> R
 where
-    F: FnOnce() -> R,
+    F1: FnOnce() -> R,
+    F2: FnOnce() -> R,
 {
     thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
 
@@ -604,11 +616,11 @@ where
         }
     }
 
-    if IGNORE_ALLOCS.with(|b| !b.replace(true)) {
-        let _reset_on_drop = ResetOnDrop;
-        Some(f())
+    if IGNORE_ALLOCS.with(|b| b.replace(true)) {
+        f1()
     } else {
-        None
+        let _reset_on_drop = ResetOnDrop;
+        f2()
     }
 }
 
@@ -621,10 +633,10 @@ where
 // - backtrace::capture::Backtrace::create
 // - backtrace::capture::Backtrace::new_unresolved
 // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-// - dhat::ignore_allocs::{{closure}}
+// - dhat::if_ignoring_allocs_else::{{closure}}
 // - std::thread::local::LocalKey<T>::try_with
 // - std::thread::local::LocalKey<T>::with
-// - dhat::ignore_allocs
+// - dhat::if_ignoring_allocs_else
 // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
 // - __rg_alloc
 // - alloc::alloc::alloc
