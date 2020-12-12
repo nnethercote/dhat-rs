@@ -185,7 +185,9 @@ use thousands::Separable;
 /// file. Only one value of this type should be created; if subsequent values
 /// of this type are created they will have no effect.
 #[derive(Debug)]
-pub struct Dhat { start_bt: Backtrace }
+pub struct Dhat {
+    start_bt: Backtrace,
+}
 
 impl Dhat {
     /// Initiate allocation profiling. This should be the first thing in
@@ -217,7 +219,8 @@ impl Dhat {
             }
             let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
             Dhat { start_bt }
-        }).unwrap()
+        })
+        .unwrap()
     }
 }
 
@@ -656,7 +659,6 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
     }
     0
 }
-
 
 // The bottom frame symbols in a backtrace (those below `main`) are typically
 // the same, and look something like this:
