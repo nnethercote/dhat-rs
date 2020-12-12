@@ -144,16 +144,6 @@
 //!     #15: 0x10c1e4ccb: std::io::stdio::print_to (stdio.rs:879:18)
 //!     #16: 0x10c1e4ccb: std::io::stdio::_print (stdio.rs:907:5)
 //!     #17: 0x10c0d6826: heap::main (heap.rs:9:5)
-//!     #18: 0x10c0d6a3e: core::ops::function::FnOnce::call_once (function.rs:227:5)
-//!     #19: 0x10c0d65e1: std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
-//!     #20: 0x10c0d6674: std::rt::lang_start::{{closure}} (rt.rs:66:18)
-//!     #21: 0x10c1ea1f0: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once (function.rs:259:13)
-//!     #22: 0x10c1ea1f0: std::panicking::try::do_call (panicking.rs:373:40)
-//!     #23: 0x10c1ea1f0: std::panicking::try (panicking.rs:337:19)
-//!     #24: 0x10c1ea1f0: std::panic::catch_unwind (panic.rs:379:14)
-//!     #25: 0x10c1ea1f0: std::rt::lang_start_internal (rt.rs:51:25)
-//!     #26: 0x10c0d6651: std::rt::lang_start (rt.rs:65:5)
-//!     #27: 0x10c0d69c2: _main (???:0:0)
 //!   }
 //! }
 //! ```
@@ -169,11 +159,12 @@
 //! viewer, and "sort metric" views involving reads, writes, or accesses are
 //! not available.
 //!
-//! The backtraces produced by this crate are trimmed at the front reduce
-//! output file sizes and improve readability in DHAT's viewer. Only one
-//! allocation-related frame will be shown at the top of the backtrace. That
-//! frame may be a function within `alloc::alloc`, a function within this
-//! crate, or a global allocation function like `__rg_alloc`.
+//! The backtraces produced by this crate are trimmed to reduce output file
+//! sizes and improve readability in DHAT's viewer.
+//! - Only one allocation-related frame will be shown at the top of the
+//!   backtrace. That frame may be a function within `alloc::alloc`, a function
+//!   within this crate, or a global allocation function like `__rg_alloc`.
+//! - Common frames at the bottom of backtraces, below `main`, are omitted.
 
 use backtrace::SymbolName;
 use fxhash::FxHashMap;
@@ -194,7 +185,7 @@ use thousands::Separable;
 /// file. Only one value of this type should be created; if subsequent values
 /// of this type are created they will have no effect.
 #[derive(Debug)]
-pub struct Dhat;
+pub struct Dhat { start_bt: Backtrace }
 
 impl Dhat {
     /// Initiate allocation profiling. This should be the first thing in
@@ -212,18 +203,21 @@ impl Dhat {
     }
 
     fn start_impl(is_heap: bool) -> Self {
-        let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-        if let Tri::Pre = tri {
-            let h = if is_heap {
-                Some(HeapGlobals::new())
+        ignore_allocs(|| {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            if let Tri::Pre = tri {
+                let h = if is_heap {
+                    Some(HeapGlobals::new())
+                } else {
+                    None
+                };
+                *tri = Tri::During(Globals::new(h));
             } else {
-                None
-            };
-            *tri = Tri::During(Globals::new(h));
-        } else {
-            eprintln!("dhat: error: A second `Dhat` object was initialized");
-        }
-        Dhat
+                eprintln!("dhat: error: A second `Dhat` object was initialized");
+            }
+            let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
+            Dhat { start_bt }
+        }).unwrap()
     }
 }
 
@@ -377,7 +371,7 @@ pub fn ad_hoc_event(weight: usize) {
 // Note: this is only separate from `drop` for testing purposes. If
 // `TRI_GLOBALS` is `Tri::During(g)` on entry then the return value will be
 // `Some(g)`, otherwise it will be `None`.
-fn finish(_dhat: &mut Dhat) -> Option<Globals> {
+fn finish(dhat: &mut Dhat) -> Option<Globals> {
     let mut filename = None;
 
     let r: Option<std::io::Result<Option<Globals>>> = ignore_allocs(|| {
@@ -430,17 +424,18 @@ fn finish(_dhat: &mut Dhat) -> Option<Globals> {
                 // symbol names, line numbers, etc.
                 bt.0.resolve();
 
-                let first_frame_to_show = first_frame_to_show(&bt);
+                let first_symbol_to_show = first_symbol_to_show(&bt);
+                let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &dhat.start_bt);
 
                 // Determine the frame indices for this backtrace. This
                 // involves getting the string for each frame and adding a new
                 // entry to `ftbl_indices` if it hasn't been seen before.
                 let mut fs = vec![];
                 let mut i = 0;
-                for frame in bt.0.frames().iter() {
+                'outer: for frame in bt.0.frames().iter() {
                     for symbol in frame.symbols().iter() {
                         i += 1;
-                        if (i - 1) < first_frame_to_show {
+                        if (i - 1) < first_symbol_to_show {
                             continue;
                         }
                         let s = format!(
@@ -467,6 +462,10 @@ fn finish(_dhat: &mut Dhat) -> Option<Globals> {
                             next_ftbl_idx - 1
                         });
                         fs.push(ftbl_idx);
+
+                        if Some(frame.ip()) == last_frame_ip_to_show {
+                            break 'outer;
+                        }
                     }
                 }
 
@@ -605,7 +604,7 @@ where
     }
 }
 
-// The top frames in a backtrace vary significantly (depending on build
+// The top frame symbols in a backtrace vary significantly (depending on build
 // configuration, platform, and program point) but they typically look
 // something like this:
 // - backtrace::backtrace::libunwind::trace
@@ -628,7 +627,7 @@ where
 // first frame that looks like it comes from allocator code or this crate's
 // code. We keep that frame, but discard everything before it. If we don't find
 // any such frames, we show from frame 0, i.e. all frames.
-fn first_frame_to_show(bt: &Backtrace) -> usize {
+fn first_symbol_to_show(bt: &Backtrace) -> usize {
     // Get the symbols into a vector so we can reverse iterate over them.
     let symbols: Vec<_> =
         bt.0.frames()
@@ -656,6 +655,40 @@ fn first_frame_to_show(bt: &Backtrace) -> usize {
         }
     }
     0
+}
+
+
+// The bottom frame symbols in a backtrace (those below `main`) are typically
+// the same, and look something like this:
+// - core::ops::function::FnOnce::call_once (function.rs:227:5)
+// - std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
+// - std::rt::lang_start::{{closure}} (rt.rs:66:18)
+// - core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once (function.rs:259:13)
+// - std::panicking::try::do_call (panicking.rs:373:40)
+// - std::panicking::try (panicking.rs:337:19)
+// - std::panic::catch_unwind (panic.rs:379:14)
+// - std::rt::lang_start_internal (rt.rs:51:25)
+// - std::rt::lang_start (rt.rs:65:5)
+// - _main (???:0:0)
+//
+// Such frames are boring and clog up the output. So we compare the bottom
+// frames with those obtained when the `Dhat` value was created. Those that
+// overlap in the two cases are the common, uninteresting ones, and we discard
+// them.
+fn last_frame_ip_to_show(bt: &Backtrace, start_bt: &Backtrace) -> Option<*mut std::ffi::c_void> {
+    let bt_frames = bt.0.frames();
+    let start_bt_frames = start_bt.0.frames();
+    let (mut i, mut j) = (bt_frames.len() - 1, start_bt_frames.len() - 1);
+    loop {
+        if bt_frames[i].ip() != start_bt_frames[j].ip() {
+            return Some(bt_frames[i].ip());
+        }
+        if i == 0 || j == 0 {
+            return None;
+        }
+        i -= 1;
+        j -= 1;
+    }
 }
 
 lazy_static! {
@@ -924,6 +957,7 @@ impl PpInfo {
 // A wrapper for `backtrace::Backtrace` that implements `Eq` and `Hash`, which
 // only look at the frame IPs. This assumes that any two
 // `backtrace::Backtrace`s with the same frame IPs are equivalent.
+#[derive(Debug)]
 struct Backtrace(backtrace::Backtrace);
 
 impl PartialEq for Backtrace {
