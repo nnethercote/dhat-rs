@@ -15,7 +15,7 @@ categories = ["development-tools::profiling"]
 
 [dependencies]
 backtrace = "0.3.50"
-fxhash = "0.2"
+rustc-hash = "1.1"
 lazy_static = "1.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
