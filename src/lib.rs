@@ -33,18 +33,6 @@
 //!   what happens within the scope of `main`. It will miss the small number of
 //!   allocations that occur before or after `main`, within the Rust runtime.
 //!
-//! # Prerequisites
-//!
-//! Obtain a copy of DHAT's viewer by getting the Valgrind source code, version
-//! 3.17 or later. At the time of writing, this version is unreleased and must
-//! be obtained from the [Valgrind repository], like so:
-//! ```text
-//! git clone git://sourceware.org/git/valgrind.git
-//! ```
-//! There is no need to build any code in this repository.
-//!
-//! [Valgrind repository]: https://www.valgrind.org/downloads/repository.html
-//!
 //! # Configuration
 //!
 //! In your `Cargo.toml` file, as well as specifying `dhat` as a dependency,
@@ -120,8 +108,17 @@
 //!
 //! # Viewing
 //!
-//! Open DHAT's viewer (`dhat/dh_view.html` within the Valgrind source code) in
-//! a web browser, and click on the "Load…" button to load `dhat-heap.json` or
+//! Open a copy of DHAT's viewer, version 3.17 or later. There are two ways to
+//! do this.
+//! - Easier: Use the [online version].
+//! - Harder: Clone the [Valgrind repository] with `git clone
+//!   git://sourceware.org/git/valgrind.git` and open `dhat/dh_view.html`.
+//!   (There is no need to build any code in this repository.)
+//!
+//! [online version]: https://nnethercote.github.io/dh_view/dh_view.html
+//! [Valgrind repository]: https://www.valgrind.org/downloads/repository.html
+//!
+//! Then click on the "Load…" button to load `dhat-heap.json` or
 //! `dhat-ad-hoc.json`.
 //!
 //! DHAT's viewer shows a tree with nodes that look like this.
