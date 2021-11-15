@@ -89,10 +89,10 @@
 //!
 //! # Running
 //!
-//! For both heap profiling and ad hoc profiling, the program will run
-//! normally. When the `Dhat` value is dropped at the end of `main`, some basic
-//! information will be printed to `stderr`. For heap profiling it will look
-//! like the following.
+//! For both heap profiling and ad hoc profiling, the program will run more
+//! slowly than normal. When the `Dhat` value is dropped at the end of `main`,
+//! some basic information will be printed to `stderr`. For heap profiling it
+//! will look like the following.
 //! ```text
 //! dhat: Total:     1,256 bytes in 6 blocks
 //! dhat: At t-gmax: 1,256 bytes in 6 blocks
