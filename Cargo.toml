@@ -1,6 +1,6 @@
 [package]
 name = "dhat"
-version = "0.2.2"
+version = "0.2.3"
 authors = ["Nicholas Nethercote <n.nethercote@gmail.com>"]
 license = "MIT OR Apache-2.0"
 edition = "2018"
