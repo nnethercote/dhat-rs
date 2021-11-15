@@ -260,15 +260,7 @@ unsafe impl GlobalAlloc for DhatAlloc {
 
                     // Record the block.
                     let now = Instant::now();
-                    let h = g.heap.as_mut().unwrap();
-                    let old = h.live_blocks.insert(
-                        ptr as usize,
-                        LiveBlock {
-                            pp_info_idx,
-                            allocation_instant: now,
-                        },
-                    );
-                    assert!(matches!(old, None));
+                    g.record_block(ptr, pp_info_idx, now);
 
                     // Update counts.
                     g.pp_infos[pp_info_idx].update_counts_for_alloc(size);
@@ -299,28 +291,36 @@ unsafe impl GlobalAlloc for DhatAlloc {
                     }
 
                     // Remove the record of the existing live block and get the
-                    // `PpInfo` (which must be present, because we created it
-                    // if necessary when this block was allocated.)
+                    // `PpInfo`. If it's not in the live block table, it must
+                    // have been allocated before `TRI_GLOBALS` was set up, and
+                    // we treat it like an `alloc`.
                     let h = g.heap.as_mut().unwrap();
-                    let LiveBlock {
-                        pp_info_idx,
-                        allocation_instant: _,
-                    } = h.live_blocks.remove(&(old_ptr as usize)).unwrap();
+                    let live_block = h.live_blocks.remove(&(old_ptr as usize));
+                    if let Some(live_block) = live_block {
+                        let pp_info_idx = live_block.pp_info_idx;
 
-                    // Record the new position of the block.
-                    let now = Instant::now();
-                    let old = h.live_blocks.insert(
-                        new_ptr as usize,
-                        LiveBlock {
-                            pp_info_idx,
-                            allocation_instant: now,
-                        },
-                    );
-                    assert!(matches!(old, None));
+                        // Record the new position of the block.
+                        let now = Instant::now();
+                        g.record_block(new_ptr, pp_info_idx, now);
 
-                    // Update counts.
-                    g.pp_infos[pp_info_idx].update_counts_for_realloc(new_size, delta);
-                    g.update_counts_for_realloc(new_size, delta, now);
+                        // Update counts.
+                        g.pp_infos[pp_info_idx].update_counts_for_realloc(new_size, delta);
+                        g.update_counts_for_realloc(new_size, delta, now);
+                    } else {
+                        let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+
+                        // Get the PpInfo for this backtrace, creating it if
+                        // necessary.
+                        let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
+
+                        // Record the block.
+                        let now = Instant::now();
+                        g.record_block(new_ptr, pp_info_idx, now);
+
+                        // Update counts.
+                        g.pp_infos[pp_info_idx].update_counts_for_alloc(new_size);
+                        g.update_counts_for_alloc(new_size, now);
+                    }
                 }
                 new_ptr
             },
@@ -337,9 +337,10 @@ unsafe impl GlobalAlloc for DhatAlloc {
                 if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
                     let size = layout.size();
 
-                    // Remove the record of the live block and get the PpInfo.
-                    // (If it's not in the live block table, it must have been
-                    // allocated before `TRI_GLOBALS` was set up.)
+                    // Remove the record of the live block and get the
+                    // `PpInfo`. If it's not in the live block table, it must
+                    // have been allocated before `TRI_GLOBALS` was set up, and
+                    // we just ignore it.
                     let h = g.heap.as_mut().unwrap();
                     if let Some(LiveBlock {
                         pp_info_idx,
@@ -396,13 +397,20 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
         || panic!("finish"),
         || {
             let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
-            let tri = std::mem::replace(tri, Tri::Post);
+            let stats = match tri {
+                Tri::Pre => unreachable!(),
+                Tri::During(g) => g.get_stats(),
+                Tri::Post(_) => {
+                    // Don't print an error message because `Dhat::new` will have
+                    // already printed one.
+                    return Ok(None);
+                }
+            };
+            let tri = std::mem::replace(tri, Tri::Post(stats));
             let mut g = if let Tri::During(g) = tri {
                 g
             } else {
-                // Don't print an error message because `Dhat::new` will have
-                // already printed one.
-                return Ok(None);
+                unreachable!()
             };
 
             let now = Instant::now();
@@ -715,7 +723,7 @@ lazy_static! {
 enum Tri<T> {
     Pre,
     During(T),
-    Post,
+    Post(Stats),
 }
 
 impl<T> Tri<T> {
@@ -800,6 +808,18 @@ impl Globals {
         })
     }
 
+    fn record_block(&mut self, ptr: *mut u8, pp_info_idx: usize, now: Instant) {
+        let h = self.heap.as_mut().unwrap();
+        let old = h.live_blocks.insert(
+            ptr as usize,
+            LiveBlock {
+                pp_info_idx,
+                allocation_instant: now,
+            },
+        );
+        assert!(matches!(old, None));
+    }
+
     fn update_counts_for_alloc(&mut self, size: usize, now: Instant) {
         self.total_blocks += 1;
         self.total_bytes += size as u64;
@@ -861,6 +881,19 @@ impl Globals {
                 h.at_tgmax_blocks = h.curr_blocks;
                 h.at_tgmax_bytes = h.curr_bytes;
             }
+        }
+    }
+
+    fn get_stats(&self) -> Stats {
+        Stats {
+            total_blocks: self.total_blocks,
+            total_bytes: self.total_bytes,
+            heap: self.heap.as_ref().map(|heap| HeapStats {
+                curr_blocks: heap.curr_blocks,
+                curr_bytes: heap.curr_bytes,
+                max_blocks: heap.max_blocks,
+                max_bytes: heap.max_bytes,
+            })
         }
     }
 }
@@ -1010,6 +1043,51 @@ struct LiveBlock {
 
     // When the block was allocated.
     allocation_instant: Instant,
+}
+
+/// Some stats about execution. For testing purposes, subject to change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stats {
+    /// Number of blocks (or events, for ad hoc profiling) for the entire run.
+    pub total_blocks: u64,
+
+    /// Number of bytes (or units, for ad hoc profiling) for the entire run.
+    pub total_bytes: u64,
+
+    /// Additional stats for heap profiling.
+    pub heap: Option<HeapStats>,
+}
+
+/// Some heap stats about execution. For testing purposes, subject to change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HeapStats {
+    /// Number of blocks currently allocated.
+    pub curr_blocks: usize,
+
+    /// Number of bytes currently allocated.
+    pub curr_bytes: usize,
+
+    /// Number of blocks allocated at the global peak.
+    pub max_blocks: usize,
+
+    /// Number of bytes allocated at the global peak.
+    pub max_bytes: usize,
+}
+
+/// Get current stats. Returns `None` if called before
+/// `Dhat::start_heap_profiling` or `Dhat::start_ad_hoc_profiling` is called.
+pub fn get_stats() -> Option<Stats> {
+    if_ignoring_allocs_else(
+        || panic!("get_stats"),
+        || {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            match tri {
+                Tri::Pre => None,
+                Tri::During(g) => Some(g.get_stats()),
+                Tri::Post(stats) => Some(stats.clone()),
+            }
+        }
+    )
 }
 
 // A Rust representation of DHAT's JSON file format, which is described in
