@@ -253,18 +253,11 @@ unsafe impl GlobalAlloc for DhatAlloc {
                 if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
                     let size = layout.size();
                     let bt = Backtrace(backtrace::Backtrace::new_unresolved());
-
-                    // Get the PpInfo for this backtrace, creating it if
-                    // necessary.
                     let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
-                    // Record the block.
                     let now = Instant::now();
                     g.record_block(ptr, pp_info_idx, now);
-
-                    // Update counts.
-                    g.pp_infos[pp_info_idx].update_counts_for_alloc(size);
-                    g.update_counts_for_alloc(size, now);
+                    g.update_counts_for_alloc(pp_info_idx, size, None, now);
                 }
                 ptr
             },
@@ -296,31 +289,17 @@ unsafe impl GlobalAlloc for DhatAlloc {
                     // we treat it like an `alloc`.
                     let h = g.heap.as_mut().unwrap();
                     let live_block = h.live_blocks.remove(&(old_ptr as usize));
-                    if let Some(live_block) = live_block {
-                        let pp_info_idx = live_block.pp_info_idx;
-
-                        // Record the new position of the block.
-                        let now = Instant::now();
-                        g.record_block(new_ptr, pp_info_idx, now);
-
-                        // Update counts.
-                        g.pp_infos[pp_info_idx].update_counts_for_realloc(new_size, delta);
-                        g.update_counts_for_realloc(new_size, delta, now);
+                    let (pp_info_idx, delta) = if let Some(live_block) = live_block {
+                        (live_block.pp_info_idx, Some(delta))
                     } else {
                         let bt = Backtrace(backtrace::Backtrace::new_unresolved());
-
-                        // Get the PpInfo for this backtrace, creating it if
-                        // necessary.
                         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
+                        (pp_info_idx, None)
+                    };
 
-                        // Record the block.
-                        let now = Instant::now();
-                        g.record_block(new_ptr, pp_info_idx, now);
-
-                        // Update counts.
-                        g.pp_infos[pp_info_idx].update_counts_for_alloc(new_size);
-                        g.update_counts_for_alloc(new_size, now);
-                    }
+                    let now = Instant::now();
+                    g.record_block(new_ptr, pp_info_idx, now);
+                    g.update_counts_for_alloc(pp_info_idx, new_size, delta, now);
                 }
                 new_ptr
             },
@@ -350,10 +329,8 @@ unsafe impl GlobalAlloc for DhatAlloc {
                         // Total bytes is coming down from a possible peak.
                         g.check_for_global_peak();
 
-                        // Update counts.
                         let alloc_duration = allocation_instant.elapsed();
-                        g.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
-                        g.update_counts_for_dealloc(size);
+                        g.update_counts_for_dealloc(pp_info_idx, size, alloc_duration);
                     }
                 }
             },
@@ -820,13 +797,20 @@ impl Globals {
         assert!(matches!(old, None));
     }
 
-    fn update_counts_for_alloc(&mut self, size: usize, now: Instant) {
+    fn update_counts_for_alloc(&mut self, pp_info_idx: usize, size: usize, delta: Option<Delta>, now: Instant) {
         self.total_blocks += 1;
         self.total_bytes += size as u64;
 
         let h = self.heap.as_mut().unwrap();
-        h.curr_blocks += 1;
-        h.curr_bytes += size;
+        if let Some(delta) = delta {
+            // realloc
+            h.curr_blocks += 0; // unchanged
+            h.curr_bytes += delta;
+        } else {
+            // alloc
+            h.curr_blocks += 1;
+            h.curr_bytes += size;
+        }
 
         // The use of `>=` not `>` means that if there are multiple equal peaks
         // we record the latest one, like `check_for_global_peak` does.
@@ -835,29 +819,16 @@ impl Globals {
             h.max_bytes = h.curr_bytes;
             h.tgmax_instant = now;
         }
+
+        self.pp_infos[pp_info_idx].update_counts_for_alloc(size, delta);
     }
 
-    fn update_counts_for_realloc(&mut self, new_size: usize, delta: Delta, now: Instant) {
-        self.total_blocks += 1;
-        self.total_bytes += new_size as u64;
-
-        let h = self.heap.as_mut().unwrap();
-        h.curr_blocks += 0; // unchanged
-        h.curr_bytes += delta;
-
-        // The use of `>=` not `>` means that if there are multiple equal peaks
-        // we record the latest one, like `check_for_global_peak` does.
-        if h.curr_bytes >= h.max_bytes {
-            h.max_blocks = h.curr_blocks;
-            h.max_bytes = h.curr_bytes;
-            h.tgmax_instant = now;
-        }
-    }
-
-    fn update_counts_for_dealloc(&mut self, size: usize) {
+    fn update_counts_for_dealloc(&mut self, pp_info_idx: usize, size: usize, alloc_duration: Duration) {
         let h = self.heap.as_mut().unwrap();
         h.curr_blocks -= 1;
         h.curr_bytes -= size;
+
+        self.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
     }
 
     fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
@@ -957,29 +928,20 @@ impl PpInfo {
         }
     }
 
-    fn update_counts_for_alloc(&mut self, size: usize) {
+    fn update_counts_for_alloc(&mut self, size: usize, delta: Option<Delta>) {
         self.total_blocks += 1;
         self.total_bytes += size as u64;
 
         let h = self.heap.as_mut().unwrap();
-        h.curr_blocks += 1;
-        h.curr_bytes += size;
-
-        // The use of `>=` not `>` means that if there are multiple equal peaks
-        // we record the latest one, like `check_for_global_peak` does.
-        if h.curr_bytes >= h.max_bytes {
-            h.max_blocks = h.curr_blocks;
-            h.max_bytes = h.curr_bytes;
+        if let Some(delta) = delta {
+            // realloc
+            h.curr_blocks += 0; // unchanged
+            h.curr_bytes += delta;
+        } else {
+            // alloc
+            h.curr_blocks += 1;
+            h.curr_bytes += size;
         }
-    }
-
-    fn update_counts_for_realloc(&mut self, new_size: usize, delta: Delta) {
-        self.total_blocks += 1;
-        self.total_bytes += new_size as u64;
-
-        let h = self.heap.as_mut().unwrap();
-        h.curr_blocks += 0; // unchanged
-        h.curr_bytes += delta;
 
         // The use of `>=` not `>` means that if there are multiple equal peaks
         // we record the latest one, like `check_for_global_peak` does.
