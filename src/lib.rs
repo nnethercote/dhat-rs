@@ -187,6 +187,339 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
+lazy_static! {
+    static ref TRI_GLOBALS: Mutex<Tri<Globals>> = Mutex::new(Tri::Pre);
+}
+
+#[derive(PartialEq)]
+enum Tri<T> {
+    // Before the first `Dhat` value is created.
+    Pre,
+
+    // During the lifetime of the first `Dhat` value.
+    During(T),
+
+    // After the lifetime of the first `Dhat` value.
+    Post(Stats),
+}
+
+impl<T> Tri<T> {
+    #[cfg(test)]
+    #[track_caller]
+    fn as_ref_unwrap(&self) -> &T {
+        if let Tri::During(v) = self {
+            &v
+        } else {
+            panic!("bad Tri");
+        }
+    }
+}
+
+// Global state that can be accessed from any thread and is therefore protected
+// by a `Mutex`.
+struct Globals {
+    // When `Globals` is created, which is when `Dhat::start_heap_profiling` or
+    // `Dhat::start_ad_hoc_profiling` is called.
+    start_instant: Instant,
+
+    // All the `PpInfos` gathered during execution. Elements are never deleted.
+    // Each element is referred to by exactly one `Backtrace` from
+    // `backtraces`, and referred to by any number of live blocks from
+    // `live_blocks`. Storing all the `PpInfos` in a `Vec` is a bit clumsy, but
+    // allows multiple references from `backtraces` and `live_blocks` without
+    // requiring any unsafety, because the references are just indices rather
+    // than `Rc`s or raw pointers or whatever.
+    pp_infos: Vec<PpInfo>,
+
+    // Each `Backtrace` is associated with a `PpInfo`. The `usize` is an index
+    // into `pp_infos`. Entries are not deleted during execution.
+    backtraces: FxHashMap<Backtrace, usize>,
+
+    // Counts for the entire run.
+    total_blocks: u64,
+    total_bytes: u64,
+
+    // Extra things kept when heap profiling.
+    heap: Option<HeapGlobals>,
+}
+
+struct HeapGlobals {
+    // Each live block is associated with a `PpInfo`. Each key is the address
+    // of a live block, and thus actually a `*mut u8`, but we store it as a
+    // `usize` because we never dereference it, and using `*mut u8` leads to
+    // compile errors because raw pointers don't implement `Send`. An element
+    // is deleted when the corresponding allocation is freed.
+    live_blocks: FxHashMap<usize, LiveBlock>,
+
+    // Current counts.
+    curr_blocks: usize,
+    curr_bytes: usize,
+
+    // Counts at the global max, i.e. when `curr_bytes` peaks.
+    max_blocks: usize,
+    max_bytes: usize,
+
+    // Time of the global max.
+    tgmax_instant: Instant,
+}
+
+impl Globals {
+    fn new(heap: Option<HeapGlobals>) -> Self {
+        Self {
+            start_instant: Instant::now(),
+            pp_infos: Vec::default(),
+            backtraces: FxHashMap::default(),
+            total_blocks: 0,
+            total_bytes: 0,
+            heap,
+        }
+    }
+
+    // Get the PpInfo for this backtrace, creating it if necessary.
+    fn get_pp_info<F: FnOnce() -> PpInfo>(&mut self, bt: Backtrace, new: F) -> usize {
+        let pp_infos = &mut self.pp_infos;
+        *self.backtraces.entry(bt).or_insert_with(|| {
+            let pp_info_idx = pp_infos.len();
+            pp_infos.push(new());
+            pp_info_idx
+        })
+    }
+
+    fn record_block(&mut self, ptr: *mut u8, pp_info_idx: usize, now: Instant) {
+        let h = self.heap.as_mut().unwrap();
+        let old = h.live_blocks.insert(
+            ptr as usize,
+            LiveBlock {
+                pp_info_idx,
+                allocation_instant: now,
+            },
+        );
+        assert!(matches!(old, None));
+    }
+
+    fn update_counts_for_alloc(
+        &mut self,
+        pp_info_idx: usize,
+        size: usize,
+        delta: Option<Delta>,
+        now: Instant,
+    ) {
+        self.total_blocks += 1;
+        self.total_bytes += size as u64;
+
+        let h = self.heap.as_mut().unwrap();
+        if let Some(delta) = delta {
+            // realloc
+            h.curr_blocks += 0; // unchanged
+            h.curr_bytes += delta;
+        } else {
+            // alloc
+            h.curr_blocks += 1;
+            h.curr_bytes += size;
+        }
+
+        // The use of `>=` not `>` means that if there are multiple equal peaks
+        // we record the latest one, like `check_for_global_peak` does.
+        if h.curr_bytes >= h.max_bytes {
+            h.max_blocks = h.curr_blocks;
+            h.max_bytes = h.curr_bytes;
+            h.tgmax_instant = now;
+        }
+
+        self.pp_infos[pp_info_idx].update_counts_for_alloc(size, delta);
+    }
+
+    fn update_counts_for_dealloc(
+        &mut self,
+        pp_info_idx: usize,
+        size: usize,
+        alloc_duration: Duration,
+    ) {
+        let h = self.heap.as_mut().unwrap();
+        h.curr_blocks -= 1;
+        h.curr_bytes -= size;
+
+        self.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
+    }
+
+    fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
+        assert!(self.heap.is_none());
+        self.total_blocks += 1;
+        self.total_bytes += weight as u64;
+    }
+
+    // If we are at peak memory, update `at_tgmax_{blocks,bytes}` in all
+    // `PpInfo`s. This is somewhat expensive so we avoid calling it on every
+    // allocation; instead we call it upon a deallocation (when we might be
+    // coming down from a global peak) and at termination (when we might be at
+    // a global peak).
+    fn check_for_global_peak(&mut self) {
+        let h = self.heap.as_mut().unwrap();
+        if h.curr_bytes == h.max_bytes {
+            // It's a peak. (If there are multiple equal peaks we record the
+            // latest one.) Record it in every PpInfo.
+            for pp_info in self.pp_infos.iter_mut() {
+                let h = pp_info.heap.as_mut().unwrap();
+                h.at_tgmax_blocks = h.curr_blocks;
+                h.at_tgmax_bytes = h.curr_bytes;
+            }
+        }
+    }
+
+    fn get_stats(&self) -> Stats {
+        Stats {
+            total_blocks: self.total_blocks,
+            total_bytes: self.total_bytes,
+            heap: self.heap.as_ref().map(|heap| HeapStats {
+                curr_blocks: heap.curr_blocks,
+                curr_bytes: heap.curr_bytes,
+                max_blocks: heap.max_blocks,
+                max_bytes: heap.max_bytes,
+            }),
+        }
+    }
+}
+
+impl HeapGlobals {
+    fn new() -> Self {
+        Self {
+            live_blocks: FxHashMap::default(),
+            curr_blocks: 0,
+            curr_bytes: 0,
+            max_blocks: 0,
+            max_bytes: 0,
+            tgmax_instant: Instant::now(),
+        }
+    }
+}
+
+struct PpInfo {
+    // The total number of blocks and bytes allocated by this PP.
+    total_blocks: u64,
+    total_bytes: u64,
+
+    heap: Option<HeapPpInfo>,
+}
+
+#[derive(Default)]
+struct HeapPpInfo {
+    // The current number of blocks and bytes allocated by this PP.
+    curr_blocks: usize,
+    curr_bytes: usize,
+
+    // The number of blocks and bytes at the PP max, i.e. when this PP's
+    // `curr_bytes` peaks.
+    max_blocks: usize,
+    max_bytes: usize,
+
+    // The number of blocks and bytes at the global max, i.e. when
+    // `Globals::curr_bytes` peaks.
+    at_tgmax_blocks: usize,
+    at_tgmax_bytes: usize,
+
+    // Total lifetimes of all blocks allocated by this PP. Includes blocks
+    // explicitly freed and blocks implicitly freed at termination.
+    total_lifetimes_duration: Duration,
+}
+
+impl PpInfo {
+    fn new_heap() -> Self {
+        Self {
+            total_blocks: 0,
+            total_bytes: 0,
+            heap: Some(HeapPpInfo::default()),
+        }
+    }
+
+    fn new_ad_hoc() -> Self {
+        Self {
+            total_blocks: 0,
+            total_bytes: 0,
+            heap: None,
+        }
+    }
+
+    fn update_counts_for_alloc(&mut self, size: usize, delta: Option<Delta>) {
+        self.total_blocks += 1;
+        self.total_bytes += size as u64;
+
+        let h = self.heap.as_mut().unwrap();
+        if let Some(delta) = delta {
+            // realloc
+            h.curr_blocks += 0; // unchanged
+            h.curr_bytes += delta;
+        } else {
+            // alloc
+            h.curr_blocks += 1;
+            h.curr_bytes += size;
+        }
+
+        // The use of `>=` not `>` means that if there are multiple equal peaks
+        // we record the latest one, like `check_for_global_peak` does.
+        if h.curr_bytes >= h.max_bytes {
+            h.max_blocks = h.curr_blocks;
+            h.max_bytes = h.curr_bytes;
+        }
+    }
+
+    fn update_counts_for_dealloc(&mut self, size: usize, alloc_duration: Duration) {
+        let h = self.heap.as_mut().unwrap();
+        h.curr_blocks -= 1;
+        h.curr_bytes -= size;
+        h.total_lifetimes_duration += alloc_duration;
+    }
+
+    fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
+        assert!(self.heap.is_none());
+        self.total_blocks += 1;
+        self.total_bytes += weight as u64;
+    }
+}
+
+struct LiveBlock {
+    // The index of the PpInfo for this block.
+    pp_info_idx: usize,
+
+    // When the block was allocated.
+    allocation_instant: Instant,
+}
+
+// We record info about allocations and deallocations. A wrinkle: the recording
+// done may trigger additional allocations. We must ignore these because (a)
+// they're part of `dhat`'s execution, not the original program's execution,
+// and (b) they would be intercepted and trigger additional allocations, which
+// would be intercepted and trigger additional allocations, and so on, leading
+// to infinite loops.
+//
+// This function runs `f1` if we are ignoring allocations, and `f2` otherwise.
+//
+// WARNING: This function must be used for any code within this crate that can
+// trigger allocations.
+fn if_ignoring_allocs_else<F1, F2, R>(f1: F1, f2: F2) -> R
+where
+    F1: FnOnce() -> R,
+    F2: FnOnce() -> R,
+{
+    thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
+
+    /// If `F` panics, then `ResetOnDrop` will still reset `IGNORE_ALLOCS`
+    /// so that it can be used again.
+    struct ResetOnDrop;
+
+    impl Drop for ResetOnDrop {
+        fn drop(&mut self) {
+            IGNORE_ALLOCS.with(|b| b.set(false));
+        }
+    }
+
+    if IGNORE_ALLOCS.with(|b| b.replace(true)) {
+        f1()
+    } else {
+        let _reset_on_drop = ResetOnDrop;
+        f2()
+    }
+}
+
 /// A type whose scope dictates the start and end of profiling.
 ///
 /// When the first value of this type is dropped, profiling data is written to
@@ -202,27 +535,22 @@ impl Dhat {
     /// `main`, and its result should be assigned to a variable whose scope
     /// ends at the end of `main`.
     pub fn start_heap_profiling() -> Self {
-        Dhat::start_impl(true)
+        Dhat::start_impl(Some(HeapGlobals::new()))
     }
 
     /// Initiate ad hoc profiling. This should be the first thing in `main`,
     /// and its result should be assigned to a variable whose scope ends at the
     /// end of `main`.
     pub fn start_ad_hoc_profiling() -> Self {
-        Dhat::start_impl(false)
+        Dhat::start_impl(None)
     }
 
-    fn start_impl(is_heap: bool) -> Self {
+    fn start_impl(h: Option<HeapGlobals>) -> Self {
         if_ignoring_allocs_else(
             || panic!("start_impl"),
             || {
                 let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
                 if let Tri::Pre = tri {
-                    let h = if is_heap {
-                        Some(HeapGlobals::new())
-                    } else {
-                        None
-                    };
                     *tri = Tri::During(Globals::new(h));
                 } else {
                     eprintln!("dhat: error: A second `Dhat` object was initialized");
@@ -576,42 +904,6 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
     }
 }
 
-// We record info about allocations and deallocations. A wrinkle: the recording
-// done may trigger additional allocations. We must ignore these because (a)
-// they're part of `dhat`'s execution, not the original program's execution,
-// and (b) they would be intercepted and trigger additional allocations, which
-// would be intercepted and trigger additional allocations, and so on, leading
-// to infinite loops.
-//
-// This function runs `f1` if we are ignoring allocations, and `f2` otherwise.
-//
-// WARNING: This function must be used for any code within this crate that can
-// trigger allocations.
-fn if_ignoring_allocs_else<F1, F2, R>(f1: F1, f2: F2) -> R
-where
-    F1: FnOnce() -> R,
-    F2: FnOnce() -> R,
-{
-    thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
-
-    /// If `F` panics, then `ResetOnDrop` will still reset `IGNORE_ALLOCS`
-    /// so that it can be used again.
-    struct ResetOnDrop;
-
-    impl Drop for ResetOnDrop {
-        fn drop(&mut self) {
-            IGNORE_ALLOCS.with(|b| b.set(false));
-        }
-    }
-
-    if IGNORE_ALLOCS.with(|b| b.replace(true)) {
-        f1()
-    } else {
-        let _reset_on_drop = ResetOnDrop;
-        f2()
-    }
-}
-
 // The top frame symbols in a backtrace vary significantly (depending on build
 // configuration, platform, and program point) but they typically look
 // something like this:
@@ -698,290 +990,6 @@ fn last_frame_ip_to_show(bt: &Backtrace, start_bt: &Backtrace) -> Option<*mut st
     }
 }
 
-lazy_static! {
-    static ref TRI_GLOBALS: Mutex<Tri<Globals>> = Mutex::new(Tri::Pre);
-}
-
-#[derive(PartialEq)]
-enum Tri<T> {
-    Pre,
-    During(T),
-    Post(Stats),
-}
-
-impl<T> Tri<T> {
-    #[cfg(test)]
-    #[track_caller]
-    fn as_ref_unwrap(&self) -> &T {
-        if let Tri::During(v) = self {
-            &v
-        } else {
-            panic!("bad Tri");
-        }
-    }
-}
-
-// Global state that can be accessed from any thread and is therefore protected
-// by a `Mutex`.
-struct Globals {
-    // When `Globals` is created, which is when `Dhat::start_heap_profiling` or
-    // `Dhat::start_ad_hoc_profiling` is called.
-    start_instant: Instant,
-
-    // All the `PpInfos` gathered during execution. Elements are never deleted.
-    // Each element is referred to by exactly one `Backtrace` from
-    // `backtraces`, and referred to by any number of live blocks from
-    // `live_blocks`. Storing all the `PpInfos` in a `Vec` is a bit clumsy, but
-    // allows multiple references from `backtraces` and `live_blocks` without
-    // requiring any unsafety, because the references are just indices rather
-    // than `Rc`s or raw pointers or whatever.
-    pp_infos: Vec<PpInfo>,
-
-    // Each `Backtrace` is associated with a `PpInfo`. The `usize` is an index
-    // into `pp_infos`. Entries are not deleted during execution.
-    backtraces: FxHashMap<Backtrace, usize>,
-
-    // Counts for the entire run.
-    total_blocks: u64,
-    total_bytes: u64,
-
-    // Extra things kept when heap profiling.
-    heap: Option<HeapGlobals>,
-}
-
-struct HeapGlobals {
-    // Each live block is associated with a `PpInfo`. Each key is the address
-    // of a live block, and thus actually a `*mut u8`, but we store it as a
-    // `usize` because we never dereference it, and using `*mut u8` leads to
-    // compile errors because raw pointers don't implement `Send`. An element
-    // is deleted when the corresponding allocation is freed.
-    live_blocks: FxHashMap<usize, LiveBlock>,
-
-    // Current counts.
-    curr_blocks: usize,
-    curr_bytes: usize,
-
-    // Counts at the global max, i.e. when `curr_bytes` peaks.
-    max_blocks: usize,
-    max_bytes: usize,
-
-    // Time of the global max.
-    tgmax_instant: Instant,
-}
-
-impl Globals {
-    fn new(heap: Option<HeapGlobals>) -> Self {
-        Self {
-            start_instant: Instant::now(),
-            pp_infos: Vec::default(),
-            backtraces: FxHashMap::default(),
-            total_blocks: 0,
-            total_bytes: 0,
-            heap,
-        }
-    }
-
-    // Get the PpInfo for this backtrace, creating it if necessary.
-    fn get_pp_info<F: FnOnce() -> PpInfo>(&mut self, bt: Backtrace, new: F) -> usize {
-        let pp_infos = &mut self.pp_infos;
-        *self.backtraces.entry(bt).or_insert_with(|| {
-            let pp_info_idx = pp_infos.len();
-            pp_infos.push(new());
-            pp_info_idx
-        })
-    }
-
-    fn record_block(&mut self, ptr: *mut u8, pp_info_idx: usize, now: Instant) {
-        let h = self.heap.as_mut().unwrap();
-        let old = h.live_blocks.insert(
-            ptr as usize,
-            LiveBlock {
-                pp_info_idx,
-                allocation_instant: now,
-            },
-        );
-        assert!(matches!(old, None));
-    }
-
-    fn update_counts_for_alloc(
-        &mut self,
-        pp_info_idx: usize,
-        size: usize,
-        delta: Option<Delta>,
-        now: Instant,
-    ) {
-        self.total_blocks += 1;
-        self.total_bytes += size as u64;
-
-        let h = self.heap.as_mut().unwrap();
-        if let Some(delta) = delta {
-            // realloc
-            h.curr_blocks += 0; // unchanged
-            h.curr_bytes += delta;
-        } else {
-            // alloc
-            h.curr_blocks += 1;
-            h.curr_bytes += size;
-        }
-
-        // The use of `>=` not `>` means that if there are multiple equal peaks
-        // we record the latest one, like `check_for_global_peak` does.
-        if h.curr_bytes >= h.max_bytes {
-            h.max_blocks = h.curr_blocks;
-            h.max_bytes = h.curr_bytes;
-            h.tgmax_instant = now;
-        }
-
-        self.pp_infos[pp_info_idx].update_counts_for_alloc(size, delta);
-    }
-
-    fn update_counts_for_dealloc(
-        &mut self,
-        pp_info_idx: usize,
-        size: usize,
-        alloc_duration: Duration,
-    ) {
-        let h = self.heap.as_mut().unwrap();
-        h.curr_blocks -= 1;
-        h.curr_bytes -= size;
-
-        self.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
-    }
-
-    fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
-        assert!(self.heap.is_none());
-        self.total_blocks += 1;
-        self.total_bytes += weight as u64;
-    }
-
-    // If we are at peak memory, update `at_tgmax_{blocks,bytes}` in all
-    // `PpInfo`s. This is somewhat expensive so we avoid calling it on every
-    // allocation; instead we call it upon a deallocation (when we might be
-    // coming down from a global peak) and at termination (when we might be at
-    // a global peak).
-    fn check_for_global_peak(&mut self) {
-        let h = self.heap.as_mut().unwrap();
-        if h.curr_bytes == h.max_bytes {
-            // It's a peak. (If there are multiple equal peaks we record the
-            // latest one.) Record it in every PpInfo.
-            for pp_info in self.pp_infos.iter_mut() {
-                let h = pp_info.heap.as_mut().unwrap();
-                h.at_tgmax_blocks = h.curr_blocks;
-                h.at_tgmax_bytes = h.curr_bytes;
-            }
-        }
-    }
-
-    fn get_stats(&self) -> Stats {
-        Stats {
-            total_blocks: self.total_blocks,
-            total_bytes: self.total_bytes,
-            heap: self.heap.as_ref().map(|heap| HeapStats {
-                curr_blocks: heap.curr_blocks,
-                curr_bytes: heap.curr_bytes,
-                max_blocks: heap.max_blocks,
-                max_bytes: heap.max_bytes,
-            }),
-        }
-    }
-}
-
-impl HeapGlobals {
-    fn new() -> Self {
-        Self {
-            live_blocks: FxHashMap::default(),
-            curr_blocks: 0,
-            curr_bytes: 0,
-            max_blocks: 0,
-            max_bytes: 0,
-            tgmax_instant: Instant::now(),
-        }
-    }
-}
-
-struct PpInfo {
-    // The total number of blocks and bytes allocated by this PP.
-    total_blocks: u64,
-    total_bytes: u64,
-
-    heap: Option<HeapPpInfo>,
-}
-
-#[derive(Default)]
-struct HeapPpInfo {
-    // The current number of blocks and bytes allocated by this PP.
-    curr_blocks: usize,
-    curr_bytes: usize,
-
-    // The number of blocks and bytes at the PP max, i.e. when this PP's
-    // `curr_bytes` peaks.
-    max_blocks: usize,
-    max_bytes: usize,
-
-    // The number of blocks and bytes at the global max, i.e. when
-    // `Globals::curr_bytes` peaks.
-    at_tgmax_blocks: usize,
-    at_tgmax_bytes: usize,
-
-    // Total lifetimes of all blocks allocated by this PP. Includes blocks
-    // explicitly freed and blocks implicitly freed at termination.
-    total_lifetimes_duration: Duration,
-}
-
-impl PpInfo {
-    fn new_heap() -> Self {
-        Self {
-            total_blocks: 0,
-            total_bytes: 0,
-            heap: Some(HeapPpInfo::default()),
-        }
-    }
-
-    fn new_ad_hoc() -> Self {
-        Self {
-            total_blocks: 0,
-            total_bytes: 0,
-            heap: None,
-        }
-    }
-
-    fn update_counts_for_alloc(&mut self, size: usize, delta: Option<Delta>) {
-        self.total_blocks += 1;
-        self.total_bytes += size as u64;
-
-        let h = self.heap.as_mut().unwrap();
-        if let Some(delta) = delta {
-            // realloc
-            h.curr_blocks += 0; // unchanged
-            h.curr_bytes += delta;
-        } else {
-            // alloc
-            h.curr_blocks += 1;
-            h.curr_bytes += size;
-        }
-
-        // The use of `>=` not `>` means that if there are multiple equal peaks
-        // we record the latest one, like `check_for_global_peak` does.
-        if h.curr_bytes >= h.max_bytes {
-            h.max_blocks = h.curr_blocks;
-            h.max_bytes = h.curr_bytes;
-        }
-    }
-
-    fn update_counts_for_dealloc(&mut self, size: usize, alloc_duration: Duration) {
-        let h = self.heap.as_mut().unwrap();
-        h.curr_blocks -= 1;
-        h.curr_bytes -= size;
-        h.total_lifetimes_duration += alloc_duration;
-    }
-
-    fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
-        assert!(self.heap.is_none());
-        self.total_blocks += 1;
-        self.total_bytes += weight as u64;
-    }
-}
-
 // A wrapper for `backtrace::Backtrace` that implements `Eq` and `Hash`, which
 // only look at the frame IPs. This assumes that any two
 // `backtrace::Backtrace`s with the same frame IPs are equivalent.
@@ -1014,14 +1022,6 @@ impl Hash for Backtrace {
             frame.ip().hash(state);
         }
     }
-}
-
-struct LiveBlock {
-    // The index of the PpInfo for this block.
-    pp_info_idx: usize,
-
-    // When the block was allocated.
-    allocation_instant: Instant,
 }
 
 /// Some stats about execution. For testing purposes, subject to change.
