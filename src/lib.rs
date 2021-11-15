@@ -91,12 +91,18 @@
 //!
 //! For both heap profiling and ad hoc profiling, the program will run
 //! normally. When the `Dhat` value is dropped at the end of `main`, some basic
-//! information will be printed to `stderr`, like so:
+//! information will be printed to `stderr`. For heap profiling it will look
+//! like the following.
 //! ```text
 //! dhat: Total:     1,256 bytes in 6 blocks
 //! dhat: At t-gmax: 1,256 bytes in 6 blocks
 //! dhat: At t-end:  1,256 bytes in 6 blocks
 //! dhat: The data in dhat-heap.json is viewable with dhat/dh_view.html
+//! ```
+//! For ad hoc profiling it will look like the following.
+//! ```text
+//! dhat: Total:     141 units in 11 events
+//! dhat: The data in dhat-ad-hoc.json is viewable with dhat/dh_view.html
 //! ```
 //! A file called `dhat-heap.json` (for heap profiling) or `dhat-ad-hoc.json`
 //! (for ad hoc profiling) will be written. It can be viewed in DHAT's viewer.
