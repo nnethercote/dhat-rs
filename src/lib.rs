@@ -959,6 +959,7 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
 
 // The bottom frame symbols in a backtrace (those below `main`) are typically
 // the same, and look something like this:
+// - main
 // - core::ops::function::FnOnce::call_once (function.rs:227:5)
 // - std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
 // - std::rt::lang_start::{{closure}} (rt.rs:66:18)
