@@ -797,7 +797,13 @@ impl Globals {
         assert!(matches!(old, None));
     }
 
-    fn update_counts_for_alloc(&mut self, pp_info_idx: usize, size: usize, delta: Option<Delta>, now: Instant) {
+    fn update_counts_for_alloc(
+        &mut self,
+        pp_info_idx: usize,
+        size: usize,
+        delta: Option<Delta>,
+        now: Instant,
+    ) {
         self.total_blocks += 1;
         self.total_bytes += size as u64;
 
@@ -823,7 +829,12 @@ impl Globals {
         self.pp_infos[pp_info_idx].update_counts_for_alloc(size, delta);
     }
 
-    fn update_counts_for_dealloc(&mut self, pp_info_idx: usize, size: usize, alloc_duration: Duration) {
+    fn update_counts_for_dealloc(
+        &mut self,
+        pp_info_idx: usize,
+        size: usize,
+        alloc_duration: Duration,
+    ) {
         let h = self.heap.as_mut().unwrap();
         h.curr_blocks -= 1;
         h.curr_bytes -= size;
@@ -864,7 +875,7 @@ impl Globals {
                 curr_bytes: heap.curr_bytes,
                 max_blocks: heap.max_blocks,
                 max_bytes: heap.max_bytes,
-            })
+            }),
         }
     }
 }
@@ -1048,7 +1059,7 @@ pub fn get_stats() -> Option<Stats> {
                 Tri::During(g) => Some(g.get_stats()),
                 Tri::Post(stats) => Some(stats.clone()),
             }
-        }
+        },
     )
 }
 

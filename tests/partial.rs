@@ -22,7 +22,7 @@ fn main() {
             curr_bytes: 0,
             max_blocks: 0,
             max_bytes: 0,
-        })
+        }),
     };
     let final_stats = dhat::Stats {
         total_blocks: 1,
@@ -32,7 +32,7 @@ fn main() {
             curr_bytes: 32,
             max_blocks: 1,
             max_bytes: 32,
-        })
+        }),
     };
 
     assert_eq!(dhat::get_stats(), None);
