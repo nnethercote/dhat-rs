@@ -909,28 +909,49 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
 }
 
 // The top frame symbols in a backtrace vary significantly (depending on build
-// configuration, platform, and program point) but they typically look
-// something like this:
-// - backtrace::backtrace::libunwind::trace
-// - backtrace::backtrace::trace_unsynchronized
-// - backtrace::backtrace::trace
-// - backtrace::capture::Backtrace::create
-// - backtrace::capture::Backtrace::new_unresolved
+// configuration, platform, and program point). Some examples:
+//
+// Linux, debug and release (Nov 2021)
 // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-// - dhat::if_ignoring_allocs_else::{{closure}}
-// - std::thread::local::LocalKey<T>::try_with
-// - std::thread::local::LocalKey<T>::with
 // - dhat::if_ignoring_allocs_else
 // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
 // - __rg_alloc
 // - alloc::alloc::alloc
 // - alloc::alloc::Global::alloc_impl
-// - <alloc::alloc::Global as core::alloc::AllocRef>::alloc
+// - <alloc::alloc::Global as core::alloc::Allocator>::allocate
+// - alloc::alloc::exchange_malloc              // sometimes missing
+// - [allocation point in program being profiled]
+//
+// Mac, debug (Nov 2021)
+// - [...backtrace library frames...]
+// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+// - dhat::if_ignoring_allocs_else
+// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+// - __rg_alloc
+// - alloc::alloc::alloc
+// - alloc::alloc::Global::alloc_impl
+// - <alloc::alloc::Global as core::alloc::Allocator>::allocate
+// - alloc::alloc::exchange_malloc              // sometimes missing
+// - [allocation point in program being profiled]
+//
+// Mac, release (Nov 2021)
+// - [...backtrace library frames...]
+// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+// - dhat::if_ignoring_allocs_else
+// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+// - alloc::alloc::alloc                        // sometimes missing
+// - [allocation point in program being profiled]
 //
 // Such frames are boring and clog up the output. So we scan backwards for the
-// first frame that looks like it comes from allocator code or this crate's
-// code. We keep that frame, but discard everything before it. If we don't find
-// any such frames, we show from frame 0, i.e. all frames.
+// first frame that looks like it comes from allocator code. We keep that
+// frame, but discard everything before it. If we don't find any such frames,
+// we show from frame 0, i.e. all frames.
+//
+// Note: this is a little dangerous. When deciding if a new backtrace has been
+// seen before, we consider all the IP addresses within it. And the now we trim
+// some of those. It's possible that this will result in some previously
+// distinct traces becoming the same, which makes dh_view.html abort. If that
+// ever happens, look to see if something is going wrong here.
 fn first_symbol_to_show(bt: &Backtrace) -> usize {
     // Get the symbols into a vector so we can reverse iterate over them.
     let symbols: Vec<_> =
@@ -943,15 +964,13 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
     for (i, symbol) in symbols.iter().enumerate().rev() {
         if let Some(s) = symbol.name().map(|name| name.to_string()) {
             // Examples of symbols that this search will match:
+            // - alloc::alloc::{alloc,realloc,exchange_malloc}
+            // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
             // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
-            // - <alloc::alloc::Global as core::alloc::AllocRef>::{alloc,grow}
             // - __rg_{alloc,realloc}
-            // - alloc::alloc::{alloc,realloc}
-            // - alloc::alloc::exchange_malloc
             if s.starts_with("alloc::alloc::")
                 || s.starts_with("<alloc::alloc::")
-                || s.starts_with("dhat::")
-                || s.starts_with("<dhat::")
+                || s.starts_with("<dhat::DhatAlloc")
                 || s.starts_with("__rg_")
             {
                 return i;
@@ -979,6 +998,9 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
 // frames with those obtained when the `Dhat` value was created. Those that
 // overlap in the two cases are the common, uninteresting ones, and we discard
 // them.
+//
+// Note: this is a little dangerous. See the comment on `first_symbol_to_show()`
+// above for more detail.
 fn last_frame_ip_to_show(bt: &Backtrace, start_bt: &Backtrace) -> Option<*mut std::ffi::c_void> {
     let bt_frames = bt.0.frames();
     let start_bt_frames = start_bt.0.frames();
