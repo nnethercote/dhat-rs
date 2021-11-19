@@ -213,6 +213,9 @@ mod tests {
             assert_eq!(a.at_tgmax_blocks, 1);
             assert_eq!(a.at_tgmax_bytes, 256);
         }
+
+        // To avoid panic when `dhat` is dropped, yuk.
+        std::mem::forget(dhat);
     }
 
     #[test]

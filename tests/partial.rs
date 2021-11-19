@@ -35,13 +35,11 @@ fn main() {
         }),
     };
 
-    assert_eq!(dhat::get_stats(), None);
-
     {
         let _dhat = Dhat::start_heap_profiling();
 
         // Things allocated beforehand aren't counted.
-        assert_eq!(dhat::get_stats(), Some(empty_stats));
+        assert_eq!(dhat::get_stats(), empty_stats);
 
         // Allocated before, freed during.
         drop(v1);
@@ -52,16 +50,12 @@ fn main() {
         // Things allocated during are counted (and the realloc is treated like
         // an alloc, i.e. we count the entire thing, not just the difference
         // between the old and new sizes).
-        assert_eq!(dhat::get_stats(), Some(final_stats.clone()));
+        assert_eq!(dhat::get_stats(), final_stats);
     }
-
-    assert_eq!(dhat::get_stats(), Some(final_stats.clone()));
 
     // Allocated before, freed after.
     drop(v2);
 
     // Allocated before, reallocated after.
     v4.push(5);
-
-    assert_eq!(dhat::get_stats(), Some(final_stats));
 }

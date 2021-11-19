@@ -204,7 +204,7 @@ enum Tri<T> {
     During(T),
 
     // After the lifetime of the first `Dhat` value.
-    Post(Stats),
+    Post,
 }
 
 impl<T> Tri<T> {
@@ -554,7 +554,7 @@ impl Dhat {
 
     fn start_impl(h: Option<HeapGlobals>) -> Self {
         if_ignoring_allocs_else(
-            || panic!("start_impl"),
+            || unreachable!(),
             || {
                 let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
                 if let Tri::Pre = tri {
@@ -684,7 +684,7 @@ unsafe impl GlobalAlloc for DhatAlloc {
 /// meaning of the weight argument is determined by the user.
 pub fn ad_hoc_event(weight: usize) {
     if_ignoring_allocs_else(
-        || panic!("ad_hoc_event"),
+        || unreachable!(),
         || {
             let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             if let Tri::During(g @ Globals { heap: None, .. }) = tri {
@@ -705,27 +705,18 @@ pub fn ad_hoc_event(weight: usize) {
 // once, the second and subsequent calls will print an error message to
 // `stderr` and return `Ok(())`.
 //
-// Note: this is only separate from `drop` for testing purposes. If
-// `TRI_GLOBALS` is `Tri::During(g)` on entry then the return value will be
-// `Some(g)`, otherwise it will be `None`.
+// Note: this is only separate from `drop` for testing purposes. Panics if
+// called when a `Dhat` object is not instantiated. You must then call
+// `std::mem::forget()` on the `Dhat` object to prevent it from being
+// automatically dropped, which would cause a panic, yuk.
 fn finish(dhat: &mut Dhat) -> Option<Globals> {
     let mut filename = None;
 
     let r: std::io::Result<Option<Globals>> = if_ignoring_allocs_else(
-        || panic!("finish"),
+        || unreachable!(),
         || {
             let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            let stats = match tri {
-                Tri::Pre => unreachable!(),
-                Tri::During(g) => g.get_stats(),
-                Tri::Post(_) => {
-                    // Don't print an error message because `Dhat::new` will have
-                    // already printed one.
-                    return Ok(None);
-                }
-            };
-            let tri = std::mem::replace(tri, Tri::Post(stats));
-            let mut g = if let Tri::During(g) = tri {
+            let mut g = if let Tri::During(g) = std::mem::replace(tri, Tri::Post) {
                 g
             } else {
                 unreachable!()
@@ -1083,17 +1074,17 @@ pub struct HeapStats {
     pub max_bytes: usize,
 }
 
-/// Get current stats. Returns `None` if called before
-/// `Dhat::start_heap_profiling` or `Dhat::start_ad_hoc_profiling` is called.
-pub fn get_stats() -> Option<Stats> {
+/// Gets current stats. Panics if called when a `Dhat` object is not
+/// instantiated.
+pub fn get_stats() -> Stats {
     if_ignoring_allocs_else(
-        || panic!("get_stats"),
+        || unreachable!(),
         || {
             let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             match tri {
-                Tri::Pre => None,
-                Tri::During(g) => Some(g.get_stats()),
-                Tri::Post(stats) => Some(stats.clone()),
+                Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
+                Tri::During(g) => g.get_stats(),
+                Tri::Post => panic!("dhat: getting stats after profiling has finished"),
             }
         },
     )
