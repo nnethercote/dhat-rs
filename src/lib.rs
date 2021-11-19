@@ -47,17 +47,14 @@
 //! For heap profiling, enable the global allocator by adding this code to your
 //! program:
 //! ```
-//! use dhat::{Dhat, DhatAlloc};
-//!
 //! #[global_allocator]
-//! static ALLOCATOR: DhatAlloc = DhatAlloc;
+//! static ALLOC: dhat::Alloc = dhat::Alloc;
 //! ```
 //! Then add the following code to the very start of your `main` function:
 //! ```
-//! # use dhat::Dhat;
-//! let _dhat = Dhat::start_heap_profiling();
+//! let _dhat = dhat::start_heap_profiling();
 //! ```
-//! `DhatAlloc` is slower than the system allocator, so it should only be
+//! `dhat::Alloc` is slower than the system allocator, so it should only be
 //! enabled while profiling.
 //!
 //! # Usage (ad hoc profiling)
@@ -70,8 +67,7 @@
 //! To do this, add the following code to the very start of your `main`
 //! function:
 //!```
-//! # use dhat::Dhat;
-//! let _dhat = Dhat::start_ad_hoc_profiling();
+//! let _dhat = dhat::start_ad_hoc_profiling();
 //! ```
 //! Then insert calls like this at points of interest:
 //! ```
@@ -535,52 +531,44 @@ pub struct Dhat {
     start_bt: Backtrace,
 }
 
-impl Dhat {
-    /// Initiates allocation profiling. Typically the first thing in `main`,
-    /// and its result should be assigned to a variable whose scope ends at the
-    /// end of `main`. Panics if `start_heap_profiling()` or
-    /// `start_ad_hoc_profiling()` has been called previously.
-    pub fn start_heap_profiling() -> Self {
-        Dhat::start_impl(Some(HeapGlobals::new()))
-    }
-
-    /// Initiates ad hoc profiling. Typically the first thing in `main`, and
-    /// its result should be assigned to a variable whose scope ends at the end
-    /// of `main`. Panics if `start_heap_profiling()` or
-    /// `start_ad_hoc_profiling()` has been called previously.
-    pub fn start_ad_hoc_profiling() -> Self {
-        Dhat::start_impl(None)
-    }
-
-    fn start_impl(h: Option<HeapGlobals>) -> Self {
-        if_ignoring_allocs_else(
-            || unreachable!(),
-            || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-                if let Tri::Pre = tri {
-                    *tri = Tri::During(Globals::new(h));
-                } else {
-                    panic!("dhat: profiling started a second time");
-                }
-                let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
-                Dhat { start_bt }
-            },
-        )
-    }
+/// Initiates allocation profiling. Typically the first thing in `main`, and
+/// its result should be assigned to a variable whose scope ends at the end of
+/// `main`. Panics if `start_heap_profiling()` or `start_ad_hoc_profiling()`
+/// has been called previously.
+pub fn start_heap_profiling() -> Dhat {
+    start_impl(Some(HeapGlobals::new()))
 }
 
-impl Drop for Dhat {
-    fn drop(&mut self) {
-        finish(self);
-    }
+/// Initiates ad hoc profiling. Typically the first thing in `main`, and its
+/// result should be assigned to a variable whose scope ends at the end of
+/// `main`. Panics if `start_heap_profiling()` or `start_ad_hoc_profiling()`
+/// has been called previously.
+pub fn start_ad_hoc_profiling() -> Dhat {
+    start_impl(None)
+}
+
+fn start_impl(h: Option<HeapGlobals>) -> Dhat {
+    if_ignoring_allocs_else(
+        || unreachable!(),
+        || {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+            if let Tri::Pre = tri {
+                *tri = Tri::During(Globals::new(h));
+            } else {
+                panic!("dhat: profiling started a second time");
+            }
+            let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
+            Dhat { start_bt }
+        },
+    )
 }
 
 /// A global allocator that tracks allocations and deallocations on behalf of
 /// the `Dhat` type.
 #[derive(Debug)]
-pub struct DhatAlloc;
+pub struct Alloc;
 
-unsafe impl GlobalAlloc for DhatAlloc {
+unsafe impl GlobalAlloc for Alloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         if_ignoring_allocs_else(
             || System.alloc(layout),
@@ -698,6 +686,12 @@ pub fn ad_hoc_event(weight: usize) {
             }
         },
     );
+}
+
+impl Drop for Dhat {
+    fn drop(&mut self) {
+        finish(self);
+    }
 }
 
 // Finish tracking allocations and deallocations, print a summary message
@@ -906,9 +900,9 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
 // configuration, platform, and program point). Some examples:
 //
 // Linux, debug and release (Nov 2021)
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
 // - dhat::if_ignoring_allocs_else
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
 // - __rg_alloc
 // - alloc::alloc::alloc
 // - alloc::alloc::Global::alloc_impl
@@ -918,9 +912,9 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
 //
 // Mac, debug (Nov 2021)
 // - [...backtrace library frames...]
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
 // - dhat::if_ignoring_allocs_else
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
 // - __rg_alloc
 // - alloc::alloc::alloc
 // - alloc::alloc::Global::alloc_impl
@@ -930,9 +924,9 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
 //
 // Mac, release (Nov 2021)
 // - [...backtrace library frames...]
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
 // - dhat::if_ignoring_allocs_else
-// - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
 // - alloc::alloc::alloc                        // sometimes missing
 // - [allocation point in program being profiled]
 //
@@ -960,11 +954,11 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
             // Examples of symbols that this search will match:
             // - alloc::alloc::{alloc,realloc,exchange_malloc}
             // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
-            // - <dhat::DhatAlloc as core::alloc::global::GlobalAlloc>::alloc
+            // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
             // - __rg_{alloc,realloc}
             if s.starts_with("alloc::alloc::")
                 || s.starts_with("<alloc::alloc::")
-                || s.starts_with("<dhat::DhatAlloc")
+                || s.starts_with("<dhat::Alloc")
                 || s.starts_with("__rg_")
             {
                 return i;

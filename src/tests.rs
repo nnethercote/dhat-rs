@@ -12,16 +12,16 @@ mod tests {
     }
 
     // We can't use a global allocator in a unit test, so this test does
-    // explicit calls to a DhatAlloc and checks that `TRI_GLOBALS` looks like
-    // it should. This doesn't test the intercept blocking, but it's hard to do
-    // better without having a separate test binary.
+    // explicit calls to a `dhat::Alloc` and checks that `TRI_GLOBALS` looks
+    // like it should. This doesn't test the intercept blocking, but it's hard
+    // to do better without having a separate test binary.
     #[test]
     #[serial] // because it involves global state
     fn heap() {
         reset_tri_globals();
 
-        let alloc = DhatAlloc;
-        let mut dhat = Dhat::start_heap_profiling();
+        let alloc = Alloc;
+        let mut dhat = start_heap_profiling();
         let layout256 = Layout::from_size_align(256, 8).unwrap();
 
         // PpInfo 0
@@ -224,7 +224,7 @@ mod tests {
         reset_tri_globals();
 
         ad_hoc_event(50); // no-op
-        let _dhat = Dhat::start_ad_hoc_profiling();
+        let _dhat = start_ad_hoc_profiling();
         ad_hoc_event(100); // PpInfo 0
         for _ in 0..3 {
             ad_hoc_event(200); // PpInfo 1

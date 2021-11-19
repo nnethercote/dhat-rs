@@ -1,10 +1,8 @@
-use dhat::{Dhat, DhatAlloc};
-
 #[global_allocator]
-static ALLOC: DhatAlloc = DhatAlloc;
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() {
-    let _dhat = Dhat::start_heap_profiling();
+    let _dhat = dhat::start_heap_profiling();
 
     println!("Hello, world!");
 }

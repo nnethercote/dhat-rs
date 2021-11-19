@@ -1,12 +1,10 @@
-use dhat::{Dhat, DhatAlloc};
-
 #[global_allocator]
-static ALLOC: DhatAlloc = DhatAlloc;
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 // It's intended that the `Dhat` instance spans the entire program's runtime.
-// This tests makes sure things are ok when that doesn't happen, and blocks
-// allocated before the `Dhat`'s lifetime are reallocated or freed during or
-// after its lifetime.
+// This tests makes sure that things are ok when that doesn't happen, and that
+// blocks allocated before the `Dhat`'s lifetime are reallocated or freed
+// during or after its lifetime.
 #[test]
 fn main() {
     let v1 = vec![1u32, 2, 3, 4];
@@ -36,7 +34,7 @@ fn main() {
     };
 
     {
-        let _dhat = Dhat::start_heap_profiling();
+        let _dhat = dhat::start_heap_profiling();
 
         // Things allocated beforehand aren't counted.
         assert_eq!(dhat::get_stats(), empty_stats);

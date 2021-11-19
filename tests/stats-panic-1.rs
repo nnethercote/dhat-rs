@@ -1,7 +1,5 @@
-use dhat::DhatAlloc;
-
 #[global_allocator]
-static ALLOC: DhatAlloc = DhatAlloc;
+static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[test]
 #[should_panic]
