@@ -808,10 +808,10 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
                                 next_ftbl_idx - 1
                             });
                             fs.push(ftbl_idx);
+                        }
 
-                            if Some(frame.ip()) == last_frame_ip_to_show {
-                                break 'outer;
-                            }
+                        if Some(frame.ip()) == last_frame_ip_to_show {
+                            break 'outer;
                         }
                     }
 
