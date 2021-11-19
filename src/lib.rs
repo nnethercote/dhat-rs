@@ -180,6 +180,7 @@
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
+use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -187,7 +188,6 @@ use std::cell::Cell;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::AddAssign;
-use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
@@ -524,27 +524,30 @@ where
     }
 }
 
-/// A type whose scope dictates the start and end of profiling.
+/// A type whose lifetime dictates the start and end of profiling. Created by
+/// `start_heap_profiling()` or `start_ad_hoc_profiling()`.
 ///
-/// When the first value of this type is dropped, profiling data is written to
-/// file. Only one value of this type should be created; if subsequent values
-/// of this type are created they will have no effect.
+/// When the single instantiation value of this type is dropped, profiling data
+/// is written to file. Only one instance of this type can be created. A panic
+/// will occur if a second value of this type is created.
 #[derive(Debug)]
 pub struct Dhat {
     start_bt: Backtrace,
 }
 
 impl Dhat {
-    /// Initiate allocation profiling. This should be the first thing in
-    /// `main`, and its result should be assigned to a variable whose scope
-    /// ends at the end of `main`.
+    /// Initiates allocation profiling. Typically the first thing in `main`,
+    /// and its result should be assigned to a variable whose scope ends at the
+    /// end of `main`. Panics if `start_heap_profiling()` or
+    /// `start_ad_hoc_profiling()` has been called previously.
     pub fn start_heap_profiling() -> Self {
         Dhat::start_impl(Some(HeapGlobals::new()))
     }
 
-    /// Initiate ad hoc profiling. This should be the first thing in `main`,
-    /// and its result should be assigned to a variable whose scope ends at the
-    /// end of `main`.
+    /// Initiates ad hoc profiling. Typically the first thing in `main`, and
+    /// its result should be assigned to a variable whose scope ends at the end
+    /// of `main`. Panics if `start_heap_profiling()` or
+    /// `start_ad_hoc_profiling()` has been called previously.
     pub fn start_ad_hoc_profiling() -> Self {
         Dhat::start_impl(None)
     }
@@ -553,11 +556,11 @@ impl Dhat {
         if_ignoring_allocs_else(
             || panic!("start_impl"),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
                 if let Tri::Pre = tri {
                     *tri = Tri::During(Globals::new(h));
                 } else {
-                    eprintln!("dhat: error: A second `Dhat` object was initialized");
+                    panic!("dhat: profiling started a second time");
                 }
                 let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
                 Dhat { start_bt }
@@ -582,7 +585,7 @@ unsafe impl GlobalAlloc for DhatAlloc {
         if_ignoring_allocs_else(
             || System.alloc(layout),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
                 let ptr = System.alloc(layout);
                 if ptr.is_null() {
                     return ptr;
@@ -606,7 +609,7 @@ unsafe impl GlobalAlloc for DhatAlloc {
         if_ignoring_allocs_else(
             || System.realloc(old_ptr, layout, new_size),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
                 let new_ptr = System.realloc(old_ptr, layout, new_size);
                 if new_ptr.is_null() {
                     return new_ptr;
@@ -648,7 +651,7 @@ unsafe impl GlobalAlloc for DhatAlloc {
         if_ignoring_allocs_else(
             || System.dealloc(ptr, layout),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
                 System.dealloc(ptr, layout);
 
                 if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
@@ -683,7 +686,7 @@ pub fn ad_hoc_event(weight: usize) {
     if_ignoring_allocs_else(
         || panic!("ad_hoc_event"),
         || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             if let Tri::During(g @ Globals { heap: None, .. }) = tri {
                 let bt = Backtrace(backtrace::Backtrace::new_unresolved());
 
@@ -711,7 +714,7 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
     let r: std::io::Result<Option<Globals>> = if_ignoring_allocs_else(
         || panic!("finish"),
         || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let stats = match tri {
                 Tri::Pre => unreachable!(),
                 Tri::During(g) => g.get_stats(),
@@ -1086,7 +1089,7 @@ pub fn get_stats() -> Option<Stats> {
     if_ignoring_allocs_else(
         || panic!("get_stats"),
         || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             match tri {
                 Tri::Pre => None,
                 Tri::During(g) => Some(g.get_stats()),

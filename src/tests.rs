@@ -7,7 +7,7 @@ mod tests {
 
     // Use this at the start of each test.
     fn reset_tri_globals() {
-        let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+        let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
         *tri = Tri::Pre;
     }
 
@@ -28,7 +28,7 @@ mod tests {
         let ptr0 = unsafe { alloc.alloc(layout256) };
 
         let tgmax_instant = {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let g = tri.as_ref_unwrap();
             let h = g.heap.as_ref().unwrap();
             assert_eq!(g.pp_infos.len(), 1);
@@ -62,7 +62,7 @@ mod tests {
         let _ptr0 = unsafe { alloc.realloc(ptr0, layout256, 512) };
 
         let tgmax_instant = {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let g = tri.as_ref_unwrap();
             let h = g.heap.as_ref().unwrap();
             assert_eq!(g.pp_infos.len(), 1);
@@ -97,7 +97,7 @@ mod tests {
         let ptr2 = unsafe { alloc.alloc(layout256) };
 
         let tgmax_instant = {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let g = tri.as_ref_unwrap();
             let h = g.heap.as_ref().unwrap();
             assert_eq!(g.pp_infos.len(), 3);
@@ -132,7 +132,7 @@ mod tests {
         }
 
         let tgmax_instant = {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let g = tri.as_ref_unwrap();
             let h = g.heap.as_ref().unwrap();
             assert_eq!(g.pp_infos.len(), 3);
@@ -231,7 +231,7 @@ mod tests {
         let _v: Vec<u8> = Vec::with_capacity(100);
 
         {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock().unwrap();
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             let g = tri.as_ref_unwrap();
             assert!(matches!(g.heap, None));
             assert_eq!(g.pp_infos.len(), 2);
