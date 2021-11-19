@@ -24,11 +24,17 @@ jobs:
         rustup component add clippy
         rustup component add rustfmt
 
-    - name: Build
+    - name: Build (debug)
       run: cargo build --verbose
 
-    - name: Run tests
+    - name: Build (release)
+      run: cargo build --verbose --release
+
+    - name: Run tests (debug)
       run: cargo test --verbose
+
+    - name: Run tests (release)
+      run: cargo test --verbose --release
 
     - name: Check formatting
       run: cargo fmt -- --check
