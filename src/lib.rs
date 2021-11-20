@@ -505,7 +505,8 @@ struct LiveBlock {
 // would be intercepted and trigger additional allocations, and so on, leading
 // to infinite loops.
 //
-// This function runs `f1` if we are ignoring allocations, and `f2` otherwise.
+// This function runs `f1` if we are currently ignoring allocations. Otherwise,
+// it runs `f2` while ignoring allocations.
 //
 // WARNING: This function must be used for any code within this crate that can
 // trigger allocations.
