@@ -52,7 +52,7 @@
 //! ```
 //! Then add the following code to the very start of your `main` function:
 //! ```
-//! let _dhat = dhat::start_heap_profiling();
+//! let _profiler = dhat::Profiler::heap_start();
 //! ```
 //! `dhat::Alloc` is slower than the system allocator, so it should only be
 //! enabled while profiling.
@@ -67,7 +67,7 @@
 //! To do this, add the following code to the very start of your `main`
 //! function:
 //!```
-//! let _dhat = dhat::start_ad_hoc_profiling();
+//! let _profiler = dhat::Profiler::ad_hoc_start();
 //! ```
 //! Then insert calls like this at points of interest:
 //! ```
@@ -218,8 +218,10 @@ impl<T> Tri<T> {
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
-    // When `Globals` is created, which is when `Dhat::start_heap_profiling` or
-    // `Dhat::start_ad_hoc_profiling` is called.
+    // The backtrace at startup. Used for backtrace trimmming.
+    start_bt: Backtrace,
+
+    // When `Globals` is created, which is when the `Profiler` is created.
     start_instant: Instant,
 
     // All the `PpInfos` gathered during execution. Elements are never deleted.
@@ -266,6 +268,7 @@ struct HeapGlobals {
 impl Globals {
     fn new(heap: Option<HeapGlobals>) -> Self {
         Self {
+            start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
@@ -532,46 +535,89 @@ where
 }
 
 /// A type whose lifetime dictates the start and end of profiling. Created by
-/// `start_heap_profiling()` or `start_ad_hoc_profiling()`.
+/// `Profiler::heap_start()`, `Profiler::ad_hoc_start()`, or
+/// `ProfilerBuilder::start()`.
 ///
 /// When the single instantiation value of this type is dropped, profiling data
 /// is written to file. Only one instance of this type can be created. A panic
 /// will occur if a second value of this type is created.
+//
+// The actual profiler state is stored in `Globals`, so it can be accessed from
+// places like `Alloc::alloc` without the `Profiler` instance being within
+// reach.
 #[derive(Debug)]
-pub struct Dhat {
-    start_bt: Backtrace,
+pub struct Profiler;
+
+impl Profiler {
+    /// Initiates allocation profiling. Typically the first thing in `main`, and
+    /// its result should be assigned to a variable whose scope ends at the end of
+    /// `main`. Panics if another `Profiler` has been created previously.
+    pub fn heap_start() -> Self {
+        ProfilerBuilder::new().start()
+    }
+
+    /// Initiates ad hoc profiling. Typically the first thing in `main`, and its
+    /// result should be assigned to a variable whose scope ends at the end of
+    /// `main`. Panics if another `Profiler` has been created previously.
+    pub fn ad_hoc_start() -> Self {
+        ProfilerBuilder::new().ad_hoc().start()
+    }
 }
 
-/// Initiates allocation profiling. Typically the first thing in `main`, and
-/// its result should be assigned to a variable whose scope ends at the end of
-/// `main`. Panics if `start_heap_profiling()` or `start_ad_hoc_profiling()`
-/// has been called previously.
-pub fn start_heap_profiling() -> Dhat {
-    start_impl(Some(HeapGlobals::new()))
+enum ProfilerKind {
+    Heap,
+    AdHoc,
 }
 
-/// Initiates ad hoc profiling. Typically the first thing in `main`, and its
-/// result should be assigned to a variable whose scope ends at the end of
-/// `main`. Panics if `start_heap_profiling()` or `start_ad_hoc_profiling()`
-/// has been called previously.
-pub fn start_ad_hoc_profiling() -> Dhat {
-    start_impl(None)
+/// A builder for `Profiler`, for cases more complex than the basic ones
+/// covered by `Profiler::heap_start()` and `Profiler::ad_hoc_start()`.
+pub struct ProfilerBuilder {
+    kind: ProfilerKind,
+    no_save_on_drop: bool,
 }
 
-fn start_impl(h: Option<HeapGlobals>) -> Dhat {
-    if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            if let Tri::Pre = tri {
-                *tri = Tri::During(Globals::new(h));
-            } else {
-                panic!("dhat: profiling started a second time");
-            }
-            let start_bt = Backtrace(backtrace::Backtrace::new_unresolved());
-            Dhat { start_bt }
-        },
-    )
+impl ProfilerBuilder {
+    /// Creates a new `ProfilerBuilder`.
+    pub fn new() -> Self {
+        Self {
+            kind: ProfilerKind::Heap,
+            no_save_on_drop: false,
+        }
+    }
+
+    /// Switches to ad hoc profiling.
+    pub fn ad_hoc(&mut self) -> &mut Self {
+        self.kind = ProfilerKind::AdHoc;
+        self
+    }
+
+    /// Set that a profile will not be saved when the profiler is dropped. This
+    /// means a profile will only be saved if a `dhat_assert*` macro call
+    /// fails.
+    pub fn no_save_on_drop(&mut self) -> &mut Self {
+        self.no_save_on_drop = true;
+        self
+    }
+
+    /// Creates a `Profiler` from the builder.
+    pub fn start(&self) -> Profiler {
+        if_ignoring_allocs_else(
+            || unreachable!(),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let h = match self.kind {
+                    ProfilerKind::Heap => Some(HeapGlobals::new()),
+                    ProfilerKind::AdHoc => None,
+                };
+                if let Tri::Pre = tri {
+                    *tri = Tri::During(Globals::new(h));
+                } else {
+                    panic!("dhat: profiling started a second time");
+                }
+                Profiler
+            },
+        )
+    }
 }
 
 /// A global allocator that tracks allocations and deallocations on behalf of
@@ -699,9 +745,9 @@ pub fn ad_hoc_event(weight: usize) {
     );
 }
 
-impl Drop for Dhat {
+impl Drop for Profiler {
     fn drop(&mut self) {
-        finish(self);
+        finish();
     }
 }
 
@@ -714,7 +760,7 @@ impl Drop for Dhat {
 // called when a `Dhat` object is not instantiated. You must then call
 // `std::mem::forget()` on the `Dhat` object to prevent it from being
 // automatically dropped, which would cause a panic, yuk.
-fn finish(dhat: &mut Dhat) -> Option<Globals> {
+fn finish() -> Option<Globals> {
     let mut filename = None;
 
     let r: std::io::Result<Option<Globals>> = if_ignoring_allocs_else(
@@ -767,7 +813,7 @@ fn finish(dhat: &mut Dhat) -> Option<Globals> {
                     bt.0.resolve();
 
                     let first_symbol_to_show = first_symbol_to_show(&bt);
-                    let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &dhat.start_bt);
+                    let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &g.start_bt);
 
                     // Determine the frame indices for this backtrace. This
                     // involves getting the string for each frame and adding a

@@ -9,7 +9,7 @@ fn main() {
     let mut v4 = vec![1u32, 2, 3, 4];
 
     {
-        let _dhat = dhat::start_heap_profiling();
+        let _profiler = dhat::Profiler::heap_start();
 
         // Things allocated beforehand aren't counted.
         let empty_stats = dhat::HeapStats {

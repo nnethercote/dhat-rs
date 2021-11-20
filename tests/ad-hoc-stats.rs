@@ -19,7 +19,7 @@ fn f1() {
 
 #[test]
 fn main() {
-    let _dhat = dhat::start_ad_hoc_profiling();
+    let _profiler = dhat::Profiler::ad_hoc_start();
 
     let empty_stats = dhat::AdHocStats {
         total_events: 0,

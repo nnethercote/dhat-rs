@@ -4,9 +4,9 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 #[test]
 #[should_panic(expected = "dhat: profiling started a second time")]
 fn main() {
-    let _dhat = dhat::start_heap_profiling();
+    let _profiler = dhat::Profiler::heap_start();
 
     let _v = vec![1u32, 2, 3, 4];
 
-    let _dhat = dhat::start_heap_profiling(); // panic
+    let _profiler = dhat::Profiler::heap_start(); // panic
 }

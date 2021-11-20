@@ -5,7 +5,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 #[should_panic(expected = "dhat: getting stats after profiling has finished")]
 fn main() {
     {
-        let _dhat = dhat::start_heap_profiling();
+        let _profiler = dhat::Profiler::heap_start();
 
         let _v = vec![1u32, 2, 3, 4];
     }

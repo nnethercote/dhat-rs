@@ -2,7 +2,7 @@
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() {
-    let _dhat = dhat::start_heap_profiling();
+    let _profiler = dhat::Profiler::heap_start();
 
     println!("Hello, world!");
 }

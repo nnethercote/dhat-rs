@@ -1,5 +1,5 @@
 fn main() {
-    let _dhat = dhat::start_ad_hoc_profiling();
+    let _profiler = dhat::Profiler::ad_hoc_start();
 
     dhat::ad_hoc_event(100);
     println!("Hello, world!");

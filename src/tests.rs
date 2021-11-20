@@ -21,7 +21,7 @@ mod tests {
         reset_tri_globals();
 
         let alloc = Alloc;
-        let mut dhat = start_heap_profiling();
+        let dhat = Profiler::heap_start();
         let layout256 = Layout::from_size_align(256, 8).unwrap();
 
         // PpInfo 0
@@ -170,7 +170,7 @@ mod tests {
         {
             // Using `finish` here lets us inspect the state of `Globals` after
             // the final processing has been done.
-            let g = finish(&mut dhat).unwrap();
+            let g = finish().unwrap();
             let h = g.heap.as_ref().unwrap();
             assert_eq!(g.pp_infos.len(), 4);
             assert_eq!(g.backtraces.len(), 0); // was consumed by `finish`
@@ -224,7 +224,7 @@ mod tests {
         reset_tri_globals();
 
         ad_hoc_event(50); // no-op
-        let _dhat = start_ad_hoc_profiling();
+        let _profiler = Profiler::ad_hoc_start();
         ad_hoc_event(100); // PpInfo 0
         for _ in 0..3 {
             ad_hoc_event(200); // PpInfo 1
