@@ -236,8 +236,8 @@ struct Globals {
     backtraces: FxHashMap<Backtrace, usize>,
 
     // Counts for the entire run.
-    total_blocks: u64,
-    total_bytes: u64,
+    total_blocks: u64, // For ad hoc profiling it's actually `total_events`.
+    total_bytes: u64,  // For ad hoc profiling it's actually `total_units`.
 
     // Extra things kept when heap profiling.
     heap: Option<HeapGlobals>,
@@ -366,16 +366,27 @@ impl Globals {
         }
     }
 
-    fn get_stats(&self) -> Stats {
-        Stats {
-            total_blocks: self.total_blocks,
-            total_bytes: self.total_bytes,
-            heap: self.heap.as_ref().map(|heap| HeapStats {
+    fn get_heap_stats(&self) -> HeapStats {
+        match &self.heap {
+            Some(heap) => HeapStats {
+                total_blocks: self.total_blocks,
+                total_bytes: self.total_bytes,
                 curr_blocks: heap.curr_blocks,
                 curr_bytes: heap.curr_bytes,
                 max_blocks: heap.max_blocks,
                 max_bytes: heap.max_bytes,
-            }),
+            },
+            None => panic!("dhat: called get_heap_stats() while doing ad hoc profiling"),
+        }
+    }
+
+    fn get_ad_hoc_stats(&self) -> AdHocStats {
+        match self.heap {
+            None => AdHocStats {
+                total_events: self.total_blocks,
+                total_units: self.total_bytes,
+            },
+            Some(_) => panic!("dhat: called get_ad_hoc_stats() while doing heap profiling"),
         }
     }
 }
@@ -1039,22 +1050,15 @@ impl Hash for Backtrace {
     }
 }
 
-/// Some stats about execution. For testing purposes, subject to change.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Stats {
-    /// Number of blocks (or events, for ad hoc profiling) for the entire run.
-    pub total_blocks: u64,
-
-    /// Number of bytes (or units, for ad hoc profiling) for the entire run.
-    pub total_bytes: u64,
-
-    /// Additional stats for heap profiling.
-    pub heap: Option<HeapStats>,
-}
-
-/// Some heap stats about execution. For testing purposes, subject to change.
+/// Some stats from heap profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeapStats {
+    /// Number of blocks allocated over the entire run.
+    pub total_blocks: u64,
+
+    /// Number of bytes allocated over the entire run.
+    pub total_bytes: u64,
+
     /// Number of blocks currently allocated.
     pub curr_blocks: usize,
 
@@ -1068,16 +1072,42 @@ pub struct HeapStats {
     pub max_bytes: usize,
 }
 
-/// Gets current stats. Panics if called when a `Dhat` object is not
-/// instantiated.
-pub fn get_stats() -> Stats {
+/// Some stats from ad hoc profiling.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AdHocStats {
+    /// Number of events recorded for the entire run.
+    pub total_events: u64,
+
+    /// Number of units recorded for the entire run.
+    pub total_units: u64,
+}
+
+/// Gets current heap stats. Panics if called when a `Dhat` object is not
+/// instantiated and doing heap profiling.
+pub fn get_heap_stats() -> HeapStats {
     if_ignoring_allocs_else(
         || unreachable!(),
         || {
             let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
             match tri {
                 Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
-                Tri::During(g) => g.get_stats(),
+                Tri::During(g) => g.get_heap_stats(),
+                Tri::Post => panic!("dhat: getting stats after profiling has finished"),
+            }
+        },
+    )
+}
+
+/// Gets current ad hoc stats. Panics if called when a `Dhat` object is not
+/// instantiated and doing ad hoc profiling.
+pub fn get_ad_hoc_stats() -> AdHocStats {
+    if_ignoring_allocs_else(
+        || unreachable!(),
+        || {
+            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+            match tri {
+                Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
+                Tri::During(g) => g.get_ad_hoc_stats(),
                 Tri::Post => panic!("dhat: getting stats after profiling has finished"),
             }
         },
