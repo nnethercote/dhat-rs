@@ -3,7 +3,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[test]
 #[should_panic(expected = "dhat: getting stats after profiling has finished")]
-fn stats_panic_2() {
+fn main() {
     {
         let _dhat = dhat::start_heap_profiling();
 
