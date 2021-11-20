@@ -10,5 +10,5 @@ fn main() {
         let _v = vec![1u32, 2, 3, 4];
     }
 
-    let _stats = dhat::get_heap_stats(); // panic
+    let _stats = dhat::HeapStats::get(); // panic
 }

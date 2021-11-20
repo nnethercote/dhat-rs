@@ -379,7 +379,7 @@ impl Globals {
                 max_blocks: heap.max_blocks,
                 max_bytes: heap.max_bytes,
             },
-            None => panic!("dhat: called get_heap_stats() while doing ad hoc profiling"),
+            None => panic!("dhat: called HeapStats::get() while doing ad hoc profiling"),
         }
     }
 
@@ -389,7 +389,7 @@ impl Globals {
                 total_events: self.total_blocks,
                 total_units: self.total_bytes,
             },
-            Some(_) => panic!("dhat: called get_ad_hoc_stats() while doing heap profiling"),
+            Some(_) => panic!("dhat: called AdHocStats::get() while doing heap profiling"),
         }
     }
 }
@@ -1130,34 +1130,38 @@ pub struct AdHocStats {
 
 /// Gets current heap stats. Panics if called when a `Dhat` object is not
 /// instantiated and doing heap profiling.
-pub fn get_heap_stats() -> HeapStats {
-    if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            match tri {
-                Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
-                Tri::During(g) => g.get_heap_stats(),
-                Tri::Post => panic!("dhat: getting stats after profiling has finished"),
-            }
-        },
-    )
+impl HeapStats {
+    pub fn get() -> Self {
+        if_ignoring_allocs_else(
+            || unreachable!(),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                match tri {
+                    Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
+                    Tri::During(g) => g.get_heap_stats(),
+                    Tri::Post => panic!("dhat: getting stats after profiling has finished"),
+                }
+            },
+        )
+    }
 }
 
 /// Gets current ad hoc stats. Panics if called when a `Dhat` object is not
 /// instantiated and doing ad hoc profiling.
-pub fn get_ad_hoc_stats() -> AdHocStats {
-    if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            match tri {
-                Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
-                Tri::During(g) => g.get_ad_hoc_stats(),
-                Tri::Post => panic!("dhat: getting stats after profiling has finished"),
-            }
-        },
-    )
+impl AdHocStats {
+    pub fn get() -> Self {
+        if_ignoring_allocs_else(
+            || unreachable!(),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                match tri {
+                    Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
+                    Tri::During(g) => g.get_ad_hoc_stats(),
+                    Tri::Post => panic!("dhat: getting stats after profiling has finished"),
+                }
+            },
+        )
+    }
 }
 
 // A Rust representation of DHAT's JSON file format, which is described in

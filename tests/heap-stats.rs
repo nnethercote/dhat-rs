@@ -20,7 +20,7 @@ fn main() {
             max_blocks: 0,
             max_bytes: 0,
         };
-        assert_eq!(dhat::get_heap_stats(), empty_stats);
+        assert_eq!(dhat::HeapStats::get(), empty_stats);
 
         // Allocated before, freed during.
         drop(v1);
@@ -39,7 +39,7 @@ fn main() {
             max_blocks: 1,
             max_bytes: 32,
         };
-        assert_eq!(dhat::get_heap_stats(), final_stats);
+        assert_eq!(dhat::HeapStats::get(), final_stats);
     }
 
     // Allocated before, freed after.

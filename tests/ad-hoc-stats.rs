@@ -25,7 +25,7 @@ fn main() {
         total_events: 0,
         total_units: 0,
     };
-    assert_eq!(dhat::get_ad_hoc_stats(), empty_stats);
+    assert_eq!(dhat::AdHocStats::get(), empty_stats);
 
     f1();
     dhat::ad_hoc_event(100);
@@ -35,5 +35,5 @@ fn main() {
         total_events: 15,
         total_units: 122,
     };
-    assert_eq!(dhat::get_ad_hoc_stats(), final_stats);
+    assert_eq!(dhat::AdHocStats::get(), final_stats);
 }
