@@ -24,3 +24,8 @@ thousands = "0.2"
 
 [dev-dependencies]
 serial_test = "0.5"
+
+# This profile is used for `cargo test --release`, and some tests depend on
+# having debug info.
+[profile.bench]
+debug = 1

@@ -203,27 +203,9 @@ enum Tri<T> {
     Post,
 }
 
-impl<T> Tri<T> {
-    #[cfg(test)]
-    #[track_caller]
-    fn as_ref_unwrap(&self) -> &T {
-        if let Tri::During(v) = self {
-            &v
-        } else {
-            panic!("bad Tri");
-        }
-    }
-}
-
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
-    // The backtrace at startup. Used for backtrace trimmming.
-    start_bt: Backtrace,
-
-    // When `Globals` is created, which is when the `Profiler` is created.
-    start_instant: Instant,
-
     // All the `PpInfos` gathered during execution. Elements are never deleted.
     // Each element is referred to by exactly one `Backtrace` from
     // `backtraces`, and referred to by any number of live blocks from
@@ -268,8 +250,6 @@ struct HeapGlobals {
 impl Globals {
     fn new(heap: Option<HeapGlobals>) -> Self {
         Self {
-            start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
-            start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
             total_blocks: 0,
@@ -535,6 +515,14 @@ where
     }
 }
 
+// Where the profile is saved when the `Profiler` is dropped.
+#[derive(Debug)]
+enum SaveDest<'m> {
+    None,
+    File,
+    Memory(&'m mut String),
+}
+
 /// A type whose lifetime dictates the start and end of profiling. Created by
 /// `Profiler::heap_start()`, `Profiler::ad_hoc_start()`, or
 /// `ProfilerBuilder::start()`.
@@ -543,13 +531,22 @@ where
 /// is written to file. Only one instance of this type can be created. A panic
 /// will occur if a second value of this type is created.
 //
-// The actual profiler state is stored in `Globals`, so it can be accessed from
-// places like `Alloc::alloc` without the `Profiler` instance being within
-// reach.
+// Much of the actual profiler state is stored in `Globals`, so it can be
+// accessed from places like `Alloc::alloc` and `ad_hoc_event()`without the
+// `Profiler` instance being within reach.
 #[derive(Debug)]
-pub struct Profiler;
+pub struct Profiler<'m> {
+    // The backtrace at startup. Used for backtrace trimmming.
+    start_bt: Backtrace,
 
-impl Profiler {
+    // When `Globals` is created, which is when the `Profiler` is created.
+    start_instant: Instant,
+
+    // Memory buffer to send output to, if requested.
+    save_dest: SaveDest<'m>,
+}
+
+impl<'m> Profiler<'m> {
     /// Initiates allocation profiling. Typically the first thing in `main`, and
     /// its result should be assigned to a variable whose scope ends at the end of
     /// `main`. Panics if another `Profiler` has been created previously.
@@ -572,36 +569,42 @@ enum ProfilerKind {
 
 /// A builder for `Profiler`, for cases more complex than the basic ones
 /// covered by `Profiler::heap_start()` and `Profiler::ad_hoc_start()`.
-pub struct ProfilerBuilder {
+pub struct ProfilerBuilder<'m> {
     kind: ProfilerKind,
-    no_save_on_drop: bool,
+    save_dest: SaveDest<'m>,
 }
 
-impl ProfilerBuilder {
+impl<'m> ProfilerBuilder<'m> {
     /// Creates a new `ProfilerBuilder`.
     pub fn new() -> Self {
         Self {
             kind: ProfilerKind::Heap,
-            no_save_on_drop: false,
+            save_dest: SaveDest::File,
         }
     }
 
-    /// Switches to ad hoc profiling.
-    pub fn ad_hoc(&mut self) -> &mut Self {
+    /// Requests ad hoc profiling.
+    pub fn ad_hoc(mut self) -> Self {
         self.kind = ProfilerKind::AdHoc;
         self
     }
 
-    /// Set that a profile will not be saved when the profiler is dropped. This
+    /// Requests that a profile not be saved when the profiler is dropped. This
     /// means a profile will only be saved if a `dhat_assert*` macro call
     /// fails.
-    pub fn no_save_on_drop(&mut self) -> &mut Self {
-        self.no_save_on_drop = true;
+    pub fn save_to_none(mut self) -> Self {
+        self.save_dest = SaveDest::None;
+        self
+    }
+
+    /// Requests that a profile be saved to memory when the profiler is dropped.
+    pub fn save_to_memory(mut self, mem: &'m mut String) -> Self {
+        self.save_dest = SaveDest::Memory(mem);
         self
     }
 
     /// Creates a `Profiler` from the builder.
-    pub fn start(&self) -> Profiler {
+    pub fn start(self) -> Profiler<'m> {
         if_ignoring_allocs_else(
             || unreachable!(),
             || {
@@ -615,7 +618,11 @@ impl ProfilerBuilder {
                 } else {
                     panic!("dhat: profiling started a second time");
                 }
-                Profiler
+                Profiler {
+                    start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
+                    start_instant: Instant::now(),
+                    save_dest: self.save_dest,
+                }
             },
         )
     }
@@ -746,210 +753,205 @@ pub fn ad_hoc_event(weight: usize) {
     );
 }
 
-impl Drop for Profiler {
+impl<'m> Drop for Profiler<'m> {
     fn drop(&mut self) {
-        finish();
-    }
-}
+        // Finish tracking allocations and deallocations, print a summary message
+        // to `stderr` and save the profile file/memory if requested.
+        let mut filename = None;
 
-// Finish tracking allocations and deallocations, print a summary message
-// to `stderr` and write output to `dhat-alloc.json`. If called more than
-// once, the second and subsequent calls will print an error message to
-// `stderr` and return `Ok(())`.
-//
-// Note: this is only separate from `drop` for testing purposes. Panics if
-// called when a `Dhat` object is not instantiated. You must then call
-// `std::mem::forget()` on the `Dhat` object to prevent it from being
-// automatically dropped, which would cause a panic, yuk.
-fn finish() -> Option<Globals> {
-    let mut filename = None;
+        let res: std::io::Result<()> = if_ignoring_allocs_else(
+            || unreachable!(),
+            || {
+                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let mut g = if let Tri::During(g) = std::mem::replace(tri, Tri::Post) {
+                    g
+                } else {
+                    unreachable!()
+                };
 
-    let r: std::io::Result<Option<Globals>> = if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            let mut g = if let Tri::During(g) = std::mem::replace(tri, Tri::Post) {
-                g
-            } else {
-                unreachable!()
-            };
+                let now = Instant::now();
 
-            let now = Instant::now();
+                if g.heap.is_some() {
+                    // Total bytes is at a possible peak.
+                    g.check_for_global_peak();
 
-            if g.heap.is_some() {
-                // Total bytes is at a possible peak.
-                g.check_for_global_peak();
+                    let h = g.heap.as_ref().unwrap();
 
-                let h = g.heap.as_ref().unwrap();
-
-                // Account for the lifetimes of all remaining live blocks.
-                for &LiveBlock {
-                    pp_info_idx,
-                    allocation_instant,
-                } in h.live_blocks.values()
-                {
-                    g.pp_infos[pp_info_idx]
-                        .heap
-                        .as_mut()
-                        .unwrap()
-                        .total_lifetimes_duration += now.duration_since(allocation_instant);
-                }
-            }
-
-            // We give each unique frame an index into `ftbl`, starting with 0
-            // for the special frame "[root]".
-            let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
-            ftbl_indices.insert("[root]".to_string(), 0);
-            let mut next_ftbl_idx = 1;
-
-            // Because `g` is being consumed, we can consume `g.backtraces` and
-            // replace it with an empty `FxHashMap`. (This is necessary because
-            // we modify the *keys* here with `resolve`, which isn't allowed
-            // with a non-consuming iterator.)
-            let pps: Vec<_> = std::mem::take(&mut g.backtraces)
-                .into_iter()
-                .map(|(mut bt, pp_info_idx)| {
-                    // Do the potentially expensive debug info lookups to get
-                    // symbol names, line numbers, etc.
-                    bt.0.resolve();
-
-                    let first_symbol_to_show = first_symbol_to_show(&bt);
-                    let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &g.start_bt);
-
-                    // Determine the frame indices for this backtrace. This
-                    // involves getting the string for each frame and adding a
-                    // new entry to `ftbl_indices` if it hasn't been seen
-                    // before.
-                    let mut fs = vec![];
-                    let mut i = 0;
-                    'outer: for frame in bt.0.frames().iter() {
-                        for symbol in frame.symbols().iter() {
-                            i += 1;
-                            if (i - 1) < first_symbol_to_show {
-                                continue;
-                            }
-                            let s = format!(
-                                // Use `{:#}` rather than `{}` to print the
-                                // "alternate" form of the symbol name, which
-                                // omits the trailing hash (e.g.
-                                // `::ha68e4508a38cc95a`).
-                                "{:?}: {:#} ({:#}:{}:{})",
-                                frame.ip(),
-                                symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-                                // We have the full path, but that's typically
-                                // very long and clogs up the output greatly.
-                                // So just use the filename, which is usually
-                                // good enough.
-                                symbol
-                                    .filename()
-                                    .and_then(|path| path.file_name())
-                                    .and_then(|file_name| file_name.to_str())
-                                    .unwrap_or("???"),
-                                symbol.lineno().unwrap_or(0),
-                                symbol.colno().unwrap_or(0),
-                            );
-
-                            let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
-                                next_ftbl_idx += 1;
-                                next_ftbl_idx - 1
-                            });
-                            fs.push(ftbl_idx);
-                        }
-
-                        if Some(frame.ip()) == last_frame_ip_to_show {
-                            break 'outer;
-                        }
+                    // Account for the lifetimes of all remaining live blocks.
+                    for &LiveBlock {
+                        pp_info_idx,
+                        allocation_instant,
+                    } in h.live_blocks.values()
+                    {
+                        g.pp_infos[pp_info_idx]
+                            .heap
+                            .as_mut()
+                            .unwrap()
+                            .total_lifetimes_duration += now.duration_since(allocation_instant);
                     }
+                }
 
-                    PpInfoJson::new(&g.pp_infos[pp_info_idx], fs)
-                })
-                .collect();
+                // We give each unique frame an index into `ftbl`, starting with 0
+                // for the special frame "[root]".
+                let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
+                ftbl_indices.insert("[root]".to_string(), 0);
+                let mut next_ftbl_idx = 1;
 
-            // We pre-allocate `ftbl` with empty strings, and then fill it in.
-            let mut ftbl = vec![String::new(); ftbl_indices.len()];
-            for (frame, ftbl_idx) in ftbl_indices.into_iter() {
-                ftbl[ftbl_idx] = frame;
-            }
+                // Because `g` is being consumed, we can consume `g.backtraces` and
+                // replace it with an empty `FxHashMap`. (This is necessary because
+                // we modify the *keys* here with `resolve`, which isn't allowed
+                // with a non-consuming iterator.)
+                let pps: Vec<_> = std::mem::take(&mut g.backtraces)
+                    .into_iter()
+                    .map(|(mut bt, pp_info_idx)| {
+                        // Do the potentially expensive debug info lookups to get
+                        // symbol names, line numbers, etc.
+                        bt.0.resolve();
 
-            let h = g.heap.as_ref();
-            let is_heap = h.is_some();
-            let json = DhatJson {
-                dhatFileVersion: 2,
-                mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
-                verb: "Allocated",
-                bklt: is_heap,
-                bkacc: false,
-                bu: if is_heap { None } else { Some("unit") },
-                bsu: if is_heap { None } else { Some("units") },
-                bksu: if is_heap { None } else { Some("events") },
-                tu: "µs",
-                Mtu: "s",
-                tuth: if is_heap { Some(10) } else { None },
-                cmd: std::env::args().collect::<Vec<_>>().join(" "),
-                pid: std::process::id(),
-                tg: h.map(|h| {
-                    h.tgmax_instant
-                        .saturating_duration_since(g.start_instant)
-                        .as_micros()
-                }),
-                te: now.duration_since(g.start_instant).as_micros(),
-                pps,
-                ftbl,
-            };
+                        let first_symbol_to_show = first_symbol_to_show(&bt);
+                        let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &self.start_bt);
 
-            eprintln!(
-                "dhat: Total:     {} {} in {} {}",
-                g.total_bytes.separate_with_commas(),
-                json.bsu.unwrap_or("bytes"),
-                g.total_blocks.separate_with_commas(),
-                json.bksu.unwrap_or("blocks"),
-            );
-            if let Some(h) = &g.heap {
+                        // Determine the frame indices for this backtrace. This
+                        // involves getting the string for each frame and adding a
+                        // new entry to `ftbl_indices` if it hasn't been seen
+                        // before.
+                        let mut fs = vec![];
+                        let mut i = 0;
+                        'outer: for frame in bt.0.frames().iter() {
+                            for symbol in frame.symbols().iter() {
+                                i += 1;
+                                if (i - 1) < first_symbol_to_show {
+                                    continue;
+                                }
+                                let s = format!(
+                                    // Use `{:#}` rather than `{}` to print the
+                                    // "alternate" form of the symbol name, which
+                                    // omits the trailing hash (e.g.
+                                    // `::ha68e4508a38cc95a`).
+                                    "{:?}: {:#} ({:#}:{}:{})",
+                                    frame.ip(),
+                                    symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
+                                    // We have the full path, but that's typically
+                                    // very long and clogs up the output greatly.
+                                    // So just use the filename, which is usually
+                                    // good enough.
+                                    symbol
+                                        .filename()
+                                        .and_then(|path| path.file_name())
+                                        .and_then(|file_name| file_name.to_str())
+                                        .unwrap_or("???"),
+                                    symbol.lineno().unwrap_or(0),
+                                    symbol.colno().unwrap_or(0),
+                                );
+
+                                let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
+                                    next_ftbl_idx += 1;
+                                    next_ftbl_idx - 1
+                                });
+                                fs.push(ftbl_idx);
+                            }
+
+                            if Some(frame.ip()) == last_frame_ip_to_show {
+                                break 'outer;
+                            }
+                        }
+
+                        PpInfoJson::new(&g.pp_infos[pp_info_idx], fs)
+                    })
+                    .collect();
+
+                // We pre-allocate `ftbl` with empty strings, and then fill it in.
+                let mut ftbl = vec![String::new(); ftbl_indices.len()];
+                for (frame, ftbl_idx) in ftbl_indices.into_iter() {
+                    ftbl[ftbl_idx] = frame;
+                }
+
+                let h = g.heap.as_ref();
+                let is_heap = h.is_some();
+                let json = DhatJson {
+                    dhatFileVersion: 2,
+                    mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
+                    verb: "Allocated",
+                    bklt: is_heap,
+                    bkacc: false,
+                    bu: if is_heap { None } else { Some("unit") },
+                    bsu: if is_heap { None } else { Some("units") },
+                    bksu: if is_heap { None } else { Some("events") },
+                    tu: "µs",
+                    Mtu: "s",
+                    tuth: if is_heap { Some(10) } else { None },
+                    cmd: std::env::args().collect::<Vec<_>>().join(" "),
+                    pid: std::process::id(),
+                    tg: h.map(|h| {
+                        h.tgmax_instant
+                            .saturating_duration_since(self.start_instant)
+                            .as_micros()
+                    }),
+                    te: now.duration_since(self.start_instant).as_micros(),
+                    pps,
+                    ftbl,
+                };
+
                 eprintln!(
-                    "dhat: At t-gmax: {} bytes in {} blocks",
-                    h.max_bytes.separate_with_commas(),
-                    h.max_blocks.separate_with_commas(),
+                    "dhat: Total:     {} {} in {} {}",
+                    g.total_bytes.separate_with_commas(),
+                    json.bsu.unwrap_or("bytes"),
+                    g.total_blocks.separate_with_commas(),
+                    json.bksu.unwrap_or("blocks"),
                 );
+                if let Some(h) = &g.heap {
+                    eprintln!(
+                        "dhat: At t-gmax: {} bytes in {} blocks",
+                        h.max_bytes.separate_with_commas(),
+                        h.max_blocks.separate_with_commas(),
+                    );
+                    eprintln!(
+                        "dhat: At t-end:  {} bytes in {} blocks",
+                        h.curr_bytes.separate_with_commas(),
+                        h.curr_blocks.separate_with_commas(),
+                    );
+                }
+
+                // `to_{string,writer}` produces JSON that is compact, and
+                // `to_{string,writer}_pretty` produces JSON that is readable.
+                // Ideally we'd have something between the two (e.g. 1-space
+                // indents instead of 2-space, no spaces after `:`, `fs` arrays on
+                // a single line) more like what DHAT produces. But in the absence
+                // of such an intermediate option, readability trumps compactness.
+                match &mut self.save_dest {
+                    SaveDest::None => eprintln!("dhat: The data has not been saved"),
+                    SaveDest::File => {
+                        filename = Some(if g.heap.is_some() {
+                            "dhat-heap.json"
+                        } else {
+                            "dhat-ad-hoc.json"
+                        });
+                        let filename = filename.unwrap();
+                        let file = File::create(filename)?;
+                        serde_json::to_writer_pretty(&file, &json)?;
+                        eprintln!(
+                            "dhat: The data in {} is viewable with dhat/dh_view.html",
+                            filename
+                        );
+                    }
+                    SaveDest::Memory(mem) => {
+                        **mem = serde_json::to_string_pretty(&json).unwrap();
+                        eprintln!("dhat: The data has been saved to the memory buffer");
+                    }
+                }
+                Ok(())
+            },
+        );
+
+        match res {
+            Ok(()) => {}
+            Err(e) => {
                 eprintln!(
-                    "dhat: At t-end:  {} bytes in {} blocks",
-                    h.curr_bytes.separate_with_commas(),
-                    h.curr_blocks.separate_with_commas(),
+                    "dhat: error: Writing to {} failed: {}",
+                    filename.unwrap(),
+                    e
                 );
             }
-
-            // `to_writer` produces JSON that is compact, and
-            // `to_writer_pretty` produces JSON that is readable. Ideally we'd
-            // have something between the two (e.g. 1-space indents instead of
-            // 2-space, no spaces after `:`, `fs` arrays on a single line) more
-            // like what DHAT produces. But in the absence of such an
-            // intermediate option, readability trumps compactness.
-            filename = Some(if g.heap.is_some() {
-                "dhat-heap.json"
-            } else {
-                "dhat-ad-hoc.json"
-            });
-            let filename = filename.unwrap();
-            let file = File::create(filename)?;
-            serde_json::to_writer_pretty(&file, &json)?;
-
-            eprintln!(
-                "dhat: The data in {} is viewable with dhat/dh_view.html",
-                filename
-            );
-
-            Ok(Some(g))
-        },
-    );
-
-    match r {
-        Ok(globals) => globals,
-        Err(e) => {
-            eprintln!(
-                "dhat: error: Writing to {} failed: {}",
-                filename.unwrap(),
-                e
-            );
-            None
         }
     }
 }
@@ -1306,6 +1308,3 @@ impl AddAssign<Delta> for u64 {
         }
     }
 }
-
-#[cfg(test)]
-mod tests;
