@@ -90,26 +90,26 @@
 //! slowly. This is because backtrace gathering can be drastically slower on
 //! Windows than on other platforms.)
 //!
-//! When the `Dhat` value is dropped at the end of `main`, some basic
-//! information will be printed to `stderr`. For heap profiling it will look
-//! like the following.
+//! When the `Profiler` is dropped at the end of `main`, some basic information
+//! will be printed to `stderr`. For heap profiling it will look like the
+//! following.
 //! ```text
 //! dhat: Total:     1,256 bytes in 6 blocks
 //! dhat: At t-gmax: 1,256 bytes in 6 blocks
 //! dhat: At t-end:  1,256 bytes in 6 blocks
-//! dhat: The data in dhat-heap.json is viewable with dhat/dh_view.html
+//! dhat: The data has been saved to dhat-heap.json, and is viewable with dhat/dh_view.html
 //! ```
 //! For ad hoc profiling it will look like the following.
 //! ```text
 //! dhat: Total:     141 units in 11 events
-//! dhat: The data in dhat-ad-hoc.json is viewable with dhat/dh_view.html
+//! dhat: The data has been saved to dhat-ad-hoc.json, and is viewable with dhat/dh_view.html
 //! ```
 //! A file called `dhat-heap.json` (for heap profiling) or `dhat-ad-hoc.json`
 //! (for ad hoc profiling) will be written. It can be viewed in DHAT's viewer.
 //!
 //! If you don't see this output, it may be because your program called
 //! `std::process::exit`, which terminates a program without running any
-//! destructors. To work around this, explicitly call `drop` on the `Dhat`
+//! destructors. To work around this, explicitly call `drop` on the `Profiler`
 //! value just before the call to `std::process:exit`.
 //!
 //! # Viewing
@@ -188,24 +188,40 @@ use std::time::{Duration, Instant};
 use thousands::Separable;
 
 lazy_static! {
-    static ref TRI_GLOBALS: Mutex<Tri<Globals>> = Mutex::new(Tri::Pre);
+    static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Pre);
 }
 
+// Likely state transitions:
+// - Pre                                     (profiling never started)
+// - Pre -> During -> PostDrop               (normal profiling)
+// - Pre -> During -> PostAssert -> PostDrop (assertion failure)
+//
+// The use of `std::process::exit` or `std::mem::forget` (on the `Profiler`)
+// can prevent transitions to the `PostDrop` state.
 #[derive(PartialEq)]
-enum Tri<T> {
-    // Before the first `Dhat` value is created.
+enum Phase<T> {
+    // Before the `Profiler` has started.
     Pre,
 
-    // During the lifetime of the first `Dhat` value.
+    // While the `Profiler` is running.
     During(T),
 
-    // After the lifetime of the first `Dhat` value.
-    Post,
+    // After the `Profiler` has stopped (due to as assertion failure).
+    PostAssert,
+
+    // After the `Profiler` has stopped (due to being dropped).
+    PostDrop,
 }
 
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
+    // The backtrace at startup. Used for backtrace trimmming.
+    start_bt: Backtrace,
+
+    // When `Globals` is created, which is when the `Profiler` is created.
+    start_instant: Instant,
+
     // All the `PpInfos` gathered during execution. Elements are never deleted.
     // Each element is referred to by exactly one `Backtrace` from
     // `backtraces`, and referred to by any number of live blocks from
@@ -250,6 +266,8 @@ struct HeapGlobals {
 impl Globals {
     fn new(heap: Option<HeapGlobals>) -> Self {
         Self {
+            start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
+            start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
             total_blocks: 0,
@@ -277,7 +295,7 @@ impl Globals {
                 allocation_instant: now,
             },
         );
-        assert!(matches!(old, None));
+        std::assert!(matches!(old, None));
     }
 
     fn update_counts_for_alloc(
@@ -326,7 +344,7 @@ impl Globals {
     }
 
     fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
-        assert!(self.heap.is_none());
+        std::assert!(self.heap.is_none());
         self.total_blocks += 1;
         self.total_bytes += weight as u64;
     }
@@ -370,6 +388,201 @@ impl Globals {
                 total_units: self.total_bytes,
             },
             Some(_) => panic!("dhat: called AdHocStats::get() while doing heap profiling"),
+        }
+    }
+
+    // Finish tracking allocations and deallocations, print a summary message
+    // to `stderr` and save the profile to file/memory if requested.
+    fn finish<'m>(mut self, save_dest: &mut SaveDest<'m>) {
+        let now = Instant::now();
+
+        if self.heap.is_some() {
+            // Total bytes is at a possible peak.
+            self.check_for_global_peak();
+
+            let h = self.heap.as_ref().unwrap();
+
+            // Account for the lifetimes of all remaining live blocks.
+            for &LiveBlock {
+                pp_info_idx,
+                allocation_instant,
+            } in h.live_blocks.values()
+            {
+                self.pp_infos[pp_info_idx]
+                    .heap
+                    .as_mut()
+                    .unwrap()
+                    .total_lifetimes_duration += now.duration_since(allocation_instant);
+            }
+        }
+
+        // We give each unique frame an index into `ftbl`, starting with 0
+        // for the special frame "[root]".
+        let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
+        ftbl_indices.insert("[root]".to_string(), 0);
+        let mut next_ftbl_idx = 1;
+
+        // Because `self` is being consumed, we can consume `self.backtraces`
+        // and replace it with an empty `FxHashMap`. (This is necessary because
+        // we modify the *keys* here with `resolve`, which isn't allowed with a
+        // non-consuming iterator.)
+        let pps: Vec<_> = std::mem::take(&mut self.backtraces)
+            .into_iter()
+            .map(|(mut bt, pp_info_idx)| {
+                // Do the potentially expensive debug info lookups to get
+                // symbol names, line numbers, etc.
+                bt.0.resolve();
+
+                let first_symbol_to_show = first_symbol_to_show(&bt);
+                let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &self.start_bt);
+
+                // Determine the frame indices for this backtrace. This
+                // involves getting the string for each frame and adding a
+                // new entry to `ftbl_indices` if it hasn't been seen
+                // before.
+                let mut fs = vec![];
+                let mut i = 0;
+                'outer: for frame in bt.0.frames().iter() {
+                    for symbol in frame.symbols().iter() {
+                        i += 1;
+                        if (i - 1) < first_symbol_to_show {
+                            continue;
+                        }
+                        let s = format!(
+                            // Use `{:#}` rather than `{}` to print the
+                            // "alternate" form of the symbol name, which
+                            // omits the trailing hash (e.g.
+                            // `::ha68e4508a38cc95a`).
+                            "{:?}: {:#} ({:#}:{}:{})",
+                            frame.ip(),
+                            symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
+                            // We have the full path, but that's typically
+                            // very long and clogs up the output greatly.
+                            // So just use the filename, which is usually
+                            // good enough.
+                            symbol
+                                .filename()
+                                .and_then(|path| path.file_name())
+                                .and_then(|file_name| file_name.to_str())
+                                .unwrap_or("???"),
+                            symbol.lineno().unwrap_or(0),
+                            symbol.colno().unwrap_or(0),
+                        );
+
+                        let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
+                            next_ftbl_idx += 1;
+                            next_ftbl_idx - 1
+                        });
+                        fs.push(ftbl_idx);
+                    }
+
+                    if Some(frame.ip()) == last_frame_ip_to_show {
+                        break 'outer;
+                    }
+                }
+
+                PpInfoJson::new(&self.pp_infos[pp_info_idx], fs)
+            })
+            .collect();
+
+        // We pre-allocate `ftbl` with empty strings, and then fill it in.
+        let mut ftbl = vec![String::new(); ftbl_indices.len()];
+        for (frame, ftbl_idx) in ftbl_indices.into_iter() {
+            ftbl[ftbl_idx] = frame;
+        }
+
+        let h = self.heap.as_ref();
+        let is_heap = h.is_some();
+        let json = DhatJson {
+            dhatFileVersion: 2,
+            mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
+            verb: "Allocated",
+            bklt: is_heap,
+            bkacc: false,
+            bu: if is_heap { None } else { Some("unit") },
+            bsu: if is_heap { None } else { Some("units") },
+            bksu: if is_heap { None } else { Some("events") },
+            tu: "µs",
+            Mtu: "s",
+            tuth: if is_heap { Some(10) } else { None },
+            cmd: std::env::args().collect::<Vec<_>>().join(" "),
+            pid: std::process::id(),
+            tg: h.map(|h| {
+                h.tgmax_instant
+                    .saturating_duration_since(self.start_instant)
+                    .as_micros()
+            }),
+            te: now.duration_since(self.start_instant).as_micros(),
+            pps,
+            ftbl,
+        };
+
+        eprintln!(
+            "dhat: Total:     {} {} in {} {}",
+            self.total_bytes.separate_with_commas(),
+            json.bsu.unwrap_or("bytes"),
+            self.total_blocks.separate_with_commas(),
+            json.bksu.unwrap_or("blocks"),
+        );
+        if let Some(h) = &self.heap {
+            eprintln!(
+                "dhat: At t-gmax: {} bytes in {} blocks",
+                h.max_bytes.separate_with_commas(),
+                h.max_blocks.separate_with_commas(),
+            );
+            eprintln!(
+                "dhat: At t-end:  {} bytes in {} blocks",
+                h.curr_bytes.separate_with_commas(),
+                h.curr_blocks.separate_with_commas(),
+            );
+        }
+
+        // `to_{string,writer}` produces JSON that is compact, and
+        // `to_{string,writer}_pretty` produces JSON that is readable.
+        // Ideally we'd have something between the two (e.g. 1-space
+        // indents instead of 2-space, no spaces after `:`, `fs` arrays on
+        // a single line) more like what DHAT produces. But in the absence
+        // of such an intermediate option, readability trumps compactness.
+        let mut filename: Option<&'static str> = None;
+        let mut save = || {
+            match save_dest {
+                SaveDest::None => {
+                    eprintln!("dhat: The data has not been saved");
+                    Ok(())
+                }
+                SaveDest::File => {
+                    filename = Some(if self.heap.is_some() {
+                        "dhat-heap.json"
+                    } else {
+                        "dhat-ad-hoc.json"
+                    });
+                    let filename = filename.unwrap();
+                    let file = File::create(filename)?;
+                    serde_json::to_writer_pretty(&file, &json)?;
+                    eprintln!(
+                    "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
+                    filename
+                );
+                    Ok(())
+                }
+                SaveDest::Memory(mem) => {
+                    **mem = serde_json::to_string_pretty(&json)?;
+                    eprintln!("dhat: The data has been saved to the memory buffer");
+                    Ok(())
+                }
+            }
+        };
+        let res: std::io::Result<()> = save();
+
+        match res {
+            Ok(()) => {}
+            Err(e) => {
+                eprintln!(
+                    "dhat: error: Writing to {} failed: {}",
+                    filename.unwrap(),
+                    e
+                );
+            }
         }
     }
 }
@@ -464,7 +677,7 @@ impl PpInfo {
     }
 
     fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
-        assert!(self.heap.is_none());
+        std::assert!(self.heap.is_none());
         self.total_blocks += 1;
         self.total_bytes += weight as u64;
     }
@@ -486,7 +699,8 @@ struct LiveBlock {
 // to infinite loops.
 //
 // This function runs `f1` if we are currently ignoring allocations. Otherwise,
-// it runs `f2` while ignoring allocations.
+// it runs `f2` while ignoring allocations. In practice, `f1` is always a
+// closure containing `unreachable!()` except within the `GlobalAlloc` methods.
 //
 // WARNING: This function must be used for any code within this crate that can
 // trigger allocations.
@@ -527,21 +741,17 @@ enum SaveDest<'m> {
 /// `Profiler::heap_start()`, `Profiler::ad_hoc_start()`, or
 /// `ProfilerBuilder::start()`.
 ///
-/// When the single instantiation value of this type is dropped, profiling data
-/// is written to file. Only one instance of this type can be created. A panic
-/// will occur if a second value of this type is created.
+/// Profiling stops when (a) this value is dropped or (b) a `dhat` assertion
+/// fails, whichever comes first. When that happens, profiling data may be
+/// written to file, depending on how the `Profiler` has been configured. Only
+/// one instance of this type can be created. A panic will occur if a second
+/// value of this type is created.
 //
 // Much of the actual profiler state is stored in `Globals`, so it can be
 // accessed from places like `Alloc::alloc` and `ad_hoc_event()`without the
 // `Profiler` instance being within reach.
 #[derive(Debug)]
 pub struct Profiler<'m> {
-    // The backtrace at startup. Used for backtrace trimmming.
-    start_bt: Backtrace,
-
-    // When `Globals` is created, which is when the `Profiler` is created.
-    start_instant: Instant,
-
     // Memory buffer to send output to, if requested.
     save_dest: SaveDest<'m>,
 }
@@ -590,7 +800,7 @@ impl<'m> ProfilerBuilder<'m> {
     }
 
     /// Requests that a profile not be saved when the profiler is dropped. This
-    /// means a profile will only be saved if a `dhat_assert*` macro call
+    /// means a profile will only be saved if a `dhat::assert*` macro call
     /// fails.
     pub fn save_to_none(mut self) -> Self {
         self.save_dest = SaveDest::None;
@@ -608,19 +818,18 @@ impl<'m> ProfilerBuilder<'m> {
         if_ignoring_allocs_else(
             || unreachable!(),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 let h = match self.kind {
                     ProfilerKind::Heap => Some(HeapGlobals::new()),
                     ProfilerKind::AdHoc => None,
                 };
-                if let Tri::Pre = tri {
-                    *tri = Tri::During(Globals::new(h));
-                } else {
-                    panic!("dhat: profiling started a second time");
+                match phase {
+                    Phase::Pre => *phase = Phase::During(Globals::new(h)),
+                    Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
+                        panic!("dhat: profiling started a second time")
+                    }
                 }
                 Profiler {
-                    start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
-                    start_instant: Instant::now(),
                     save_dest: self.save_dest,
                 }
             },
@@ -629,7 +838,7 @@ impl<'m> ProfilerBuilder<'m> {
 }
 
 /// A global allocator that tracks allocations and deallocations on behalf of
-/// the `Dhat` type.
+/// the `Profiler` type.
 #[derive(Debug)]
 pub struct Alloc;
 
@@ -638,13 +847,13 @@ unsafe impl GlobalAlloc for Alloc {
         if_ignoring_allocs_else(
             || System.alloc(layout),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 let ptr = System.alloc(layout);
                 if ptr.is_null() {
                     return ptr;
                 }
 
-                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                     let size = layout.size();
                     let bt = Backtrace(backtrace::Backtrace::new_unresolved());
                     let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
@@ -662,13 +871,13 @@ unsafe impl GlobalAlloc for Alloc {
         if_ignoring_allocs_else(
             || System.realloc(old_ptr, layout, new_size),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 let new_ptr = System.realloc(old_ptr, layout, new_size);
                 if new_ptr.is_null() {
                     return new_ptr;
                 }
 
-                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                     let old_size = layout.size();
                     let delta = Delta::new(old_size, new_size);
 
@@ -704,10 +913,10 @@ unsafe impl GlobalAlloc for Alloc {
         if_ignoring_allocs_else(
             || System.dealloc(ptr, layout),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 System.dealloc(ptr, layout);
 
-                if let Tri::During(g @ Globals { heap: Some(_), .. }) = tri {
+                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                     let size = layout.size();
 
                     // Remove the record of the live block and get the
@@ -732,15 +941,15 @@ unsafe impl GlobalAlloc for Alloc {
     }
 }
 
-/// Register an event during ad hoc profiling. Has no effect unless a `Dhat`
-/// value that was created with `Dhat::start_ad_hoc_profiling` is in scope. The
-/// meaning of the weight argument is determined by the user.
+/// Register an event during ad hoc profiling. The meaning of the weight
+/// argument is determined by the user. Has no effect if called when a
+/// `Profiler` is not running or not doing ad hoc profiling.
 pub fn ad_hoc_event(weight: usize) {
     if_ignoring_allocs_else(
         || unreachable!(),
         || {
-            let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-            if let Tri::During(g @ Globals { heap: None, .. }) = tri {
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            if let Phase::During(g @ Globals { heap: None, .. }) = phase {
                 let bt = Backtrace(backtrace::Backtrace::new_unresolved());
 
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
@@ -755,204 +964,18 @@ pub fn ad_hoc_event(weight: usize) {
 
 impl<'m> Drop for Profiler<'m> {
     fn drop(&mut self) {
-        // Finish tracking allocations and deallocations, print a summary message
-        // to `stderr` and save the profile file/memory if requested.
-        let mut filename = None;
-
-        let res: std::io::Result<()> = if_ignoring_allocs_else(
+        if_ignoring_allocs_else(
             || unreachable!(),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-                let mut g = if let Tri::During(g) = std::mem::replace(tri, Tri::Post) {
-                    g
-                } else {
-                    unreachable!()
-                };
-
-                let now = Instant::now();
-
-                if g.heap.is_some() {
-                    // Total bytes is at a possible peak.
-                    g.check_for_global_peak();
-
-                    let h = g.heap.as_ref().unwrap();
-
-                    // Account for the lifetimes of all remaining live blocks.
-                    for &LiveBlock {
-                        pp_info_idx,
-                        allocation_instant,
-                    } in h.live_blocks.values()
-                    {
-                        g.pp_infos[pp_info_idx]
-                            .heap
-                            .as_mut()
-                            .unwrap()
-                            .total_lifetimes_duration += now.duration_since(allocation_instant);
-                    }
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+                match std::mem::replace(phase, Phase::PostDrop) {
+                    Phase::Pre => unreachable!(),
+                    Phase::During(g) => g.finish(&mut self.save_dest),
+                    Phase::PostAssert => {}
+                    Phase::PostDrop => unreachable!(),
                 }
-
-                // We give each unique frame an index into `ftbl`, starting with 0
-                // for the special frame "[root]".
-                let mut ftbl_indices: FxHashMap<String, usize> = FxHashMap::default();
-                ftbl_indices.insert("[root]".to_string(), 0);
-                let mut next_ftbl_idx = 1;
-
-                // Because `g` is being consumed, we can consume `g.backtraces` and
-                // replace it with an empty `FxHashMap`. (This is necessary because
-                // we modify the *keys* here with `resolve`, which isn't allowed
-                // with a non-consuming iterator.)
-                let pps: Vec<_> = std::mem::take(&mut g.backtraces)
-                    .into_iter()
-                    .map(|(mut bt, pp_info_idx)| {
-                        // Do the potentially expensive debug info lookups to get
-                        // symbol names, line numbers, etc.
-                        bt.0.resolve();
-
-                        let first_symbol_to_show = first_symbol_to_show(&bt);
-                        let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &self.start_bt);
-
-                        // Determine the frame indices for this backtrace. This
-                        // involves getting the string for each frame and adding a
-                        // new entry to `ftbl_indices` if it hasn't been seen
-                        // before.
-                        let mut fs = vec![];
-                        let mut i = 0;
-                        'outer: for frame in bt.0.frames().iter() {
-                            for symbol in frame.symbols().iter() {
-                                i += 1;
-                                if (i - 1) < first_symbol_to_show {
-                                    continue;
-                                }
-                                let s = format!(
-                                    // Use `{:#}` rather than `{}` to print the
-                                    // "alternate" form of the symbol name, which
-                                    // omits the trailing hash (e.g.
-                                    // `::ha68e4508a38cc95a`).
-                                    "{:?}: {:#} ({:#}:{}:{})",
-                                    frame.ip(),
-                                    symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-                                    // We have the full path, but that's typically
-                                    // very long and clogs up the output greatly.
-                                    // So just use the filename, which is usually
-                                    // good enough.
-                                    symbol
-                                        .filename()
-                                        .and_then(|path| path.file_name())
-                                        .and_then(|file_name| file_name.to_str())
-                                        .unwrap_or("???"),
-                                    symbol.lineno().unwrap_or(0),
-                                    symbol.colno().unwrap_or(0),
-                                );
-
-                                let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
-                                    next_ftbl_idx += 1;
-                                    next_ftbl_idx - 1
-                                });
-                                fs.push(ftbl_idx);
-                            }
-
-                            if Some(frame.ip()) == last_frame_ip_to_show {
-                                break 'outer;
-                            }
-                        }
-
-                        PpInfoJson::new(&g.pp_infos[pp_info_idx], fs)
-                    })
-                    .collect();
-
-                // We pre-allocate `ftbl` with empty strings, and then fill it in.
-                let mut ftbl = vec![String::new(); ftbl_indices.len()];
-                for (frame, ftbl_idx) in ftbl_indices.into_iter() {
-                    ftbl[ftbl_idx] = frame;
-                }
-
-                let h = g.heap.as_ref();
-                let is_heap = h.is_some();
-                let json = DhatJson {
-                    dhatFileVersion: 2,
-                    mode: if is_heap { "rust-heap" } else { "rust-ad-hoc" },
-                    verb: "Allocated",
-                    bklt: is_heap,
-                    bkacc: false,
-                    bu: if is_heap { None } else { Some("unit") },
-                    bsu: if is_heap { None } else { Some("units") },
-                    bksu: if is_heap { None } else { Some("events") },
-                    tu: "µs",
-                    Mtu: "s",
-                    tuth: if is_heap { Some(10) } else { None },
-                    cmd: std::env::args().collect::<Vec<_>>().join(" "),
-                    pid: std::process::id(),
-                    tg: h.map(|h| {
-                        h.tgmax_instant
-                            .saturating_duration_since(self.start_instant)
-                            .as_micros()
-                    }),
-                    te: now.duration_since(self.start_instant).as_micros(),
-                    pps,
-                    ftbl,
-                };
-
-                eprintln!(
-                    "dhat: Total:     {} {} in {} {}",
-                    g.total_bytes.separate_with_commas(),
-                    json.bsu.unwrap_or("bytes"),
-                    g.total_blocks.separate_with_commas(),
-                    json.bksu.unwrap_or("blocks"),
-                );
-                if let Some(h) = &g.heap {
-                    eprintln!(
-                        "dhat: At t-gmax: {} bytes in {} blocks",
-                        h.max_bytes.separate_with_commas(),
-                        h.max_blocks.separate_with_commas(),
-                    );
-                    eprintln!(
-                        "dhat: At t-end:  {} bytes in {} blocks",
-                        h.curr_bytes.separate_with_commas(),
-                        h.curr_blocks.separate_with_commas(),
-                    );
-                }
-
-                // `to_{string,writer}` produces JSON that is compact, and
-                // `to_{string,writer}_pretty` produces JSON that is readable.
-                // Ideally we'd have something between the two (e.g. 1-space
-                // indents instead of 2-space, no spaces after `:`, `fs` arrays on
-                // a single line) more like what DHAT produces. But in the absence
-                // of such an intermediate option, readability trumps compactness.
-                match &mut self.save_dest {
-                    SaveDest::None => eprintln!("dhat: The data has not been saved"),
-                    SaveDest::File => {
-                        filename = Some(if g.heap.is_some() {
-                            "dhat-heap.json"
-                        } else {
-                            "dhat-ad-hoc.json"
-                        });
-                        let filename = filename.unwrap();
-                        let file = File::create(filename)?;
-                        serde_json::to_writer_pretty(&file, &json)?;
-                        eprintln!(
-                            "dhat: The data in {} is viewable with dhat/dh_view.html",
-                            filename
-                        );
-                    }
-                    SaveDest::Memory(mem) => {
-                        **mem = serde_json::to_string_pretty(&json).unwrap();
-                        eprintln!("dhat: The data has been saved to the memory buffer");
-                    }
-                }
-                Ok(())
             },
         );
-
-        match res {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!(
-                    "dhat: error: Writing to {} failed: {}",
-                    filename.unwrap(),
-                    e
-                );
-            }
-        }
     }
 }
 
@@ -1043,7 +1066,7 @@ fn first_symbol_to_show(bt: &Backtrace) -> usize {
 // - _main (???:0:0)
 //
 // Such frames are boring and clog up the output. So we compare the bottom
-// frames with those obtained when the `Dhat` value was created. Those that
+// frames with those obtained when the `Globals` value was created. Those that
 // overlap in the two cases are the common, uninteresting ones, and we discard
 // them.
 //
@@ -1131,40 +1154,146 @@ pub struct AdHocStats {
     pub total_units: u64,
 }
 
-/// Gets current heap stats. Panics if called when a `Dhat` object is not
-/// instantiated and doing heap profiling.
+/// Gets current heap stats. Panics if called when a `Profiler` is not running
+/// or not doing heap profiling.
 impl HeapStats {
     pub fn get() -> Self {
         if_ignoring_allocs_else(
             || unreachable!(),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-                match tri {
-                    Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
-                    Tri::During(g) => g.get_heap_stats(),
-                    Tri::Post => panic!("dhat: getting stats after profiling has finished"),
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+                match phase {
+                    Phase::Pre => panic!("dhat: getting stats before the profiler has started"),
+                    Phase::During(g) => g.get_heap_stats(),
+                    Phase::PostAssert | Phase::PostDrop => {
+                        panic!("dhat: getting stats after the profiler has stopped")
+                    }
                 }
             },
         )
     }
 }
 
-/// Gets current ad hoc stats. Panics if called when a `Dhat` object is not
-/// instantiated and doing ad hoc profiling.
+/// Gets current ad hoc stats. Panics if called when a `Profiler` is not
+/// running or not doing ad hoc profiling.
 impl AdHocStats {
     pub fn get() -> Self {
         if_ignoring_allocs_else(
             || unreachable!(),
             || {
-                let tri: &mut Tri<Globals> = &mut TRI_GLOBALS.lock();
-                match tri {
-                    Tri::Pre => panic!("dhat: getting stats before profiling has begun"),
-                    Tri::During(g) => g.get_ad_hoc_stats(),
-                    Tri::Post => panic!("dhat: getting stats after profiling has finished"),
+                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+                match phase {
+                    Phase::Pre => panic!("dhat: getting stats before the profiler has started"),
+                    Phase::During(g) => g.get_ad_hoc_stats(),
+                    Phase::PostAssert | Phase::PostDrop => {
+                        panic!("dhat: getting stats after the profiler has stopped")
+                    }
                 }
             },
         )
     }
+}
+
+pub fn check_assert_condition<F>(cond: F) -> bool
+where
+    F: FnOnce() -> bool,
+{
+    // We do the test within `check_assert_condition` (as opposed to within the
+    // `assert*` macros) so that we'll always detect if the profiler isn't
+    // running.
+    if_ignoring_allocs_else(
+        || unreachable!(),
+        || {
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            match phase {
+                Phase::Pre => unreachable!(),
+                Phase::During(_) => {
+                    if cond() {
+                        return false;
+                    }
+                }
+                Phase::PostAssert => panic!("dhat: asserting after the profiler has stopped"),
+                Phase::PostDrop => unreachable!(),
+            }
+            // Failure.
+            match std::mem::replace(phase, Phase::PostAssert) {
+                Phase::Pre => unreachable!(),
+                Phase::During(g) => {
+                    let mut save_dest = SaveDest::File;
+                    g.finish(&mut save_dest);
+                    true
+                }
+                Phase::PostAssert => unreachable!(),
+                Phase::PostDrop => unreachable!(),
+            }
+        },
+    )
+}
+
+/// Asserts that two expressions are equal. On failure, this macro will write
+/// the current profile state to file and panic. Also panics if called when a
+/// `Profiler` is not running. As for `std::assert`, additional format
+/// arguments are supported.
+#[macro_export]
+macro_rules! assert {
+    ($cond:expr) => ({
+        if dhat::check_assert_condition(|| $cond) {
+            panic!("dhat: assertion failed: {}", stringify!($cond));
+        }
+    });
+    ($cond:expr, $($arg:tt)+) => ({
+        if dhat::check_assert_condition(|| $cond) {
+            panic!("dhat: assertion failed: {}: {}", stringify!($cond), format_args!($($arg)+));
+        }
+    });
+}
+
+/// Asserts that two expressions are equal. On failure, this macro will write
+/// the current profile state to file and panic. Also panics if called when a
+/// `Profiler` is not running. As for `std::assert_eq`, additional format
+/// arguments are supported.
+#[macro_export]
+macro_rules! assert_eq {
+    ($left:expr, $right:expr $(,)?) => ({
+        if dhat::check_assert_condition( || $left == $right) {
+            panic!(
+                "dhat: assertion failed: `(left == right)`\n  left: `{:?}`,\n right: `{:?}`",
+                $left, $right
+            );
+        }
+    });
+    ($left:expr, $right:expr, $($arg:tt)+) => ({
+        if dhat::check_assert_condition(|| $left == $right) {
+            panic!(
+                "dhat: assertion failed: `(left == right)`\n  left: `{:?}`,\n right: `{:?}`: {}",
+                $left, $right, format_args!($($arg)+)
+            );
+        }
+    });
+}
+
+/// Asserts that two expressions are equal. On failure, this macro will write
+/// the current profile state to file and panic. Also panics if called when a
+/// `Profiler` is not running. As for `std::assert_ne`, additional format
+/// arguments are supported.
+#[macro_export]
+macro_rules! assert_ne {
+    ($left:expr, $right:expr) => ({
+        if dhat::check_assert_condition(|| $left != $right) {
+            panic!(
+                "dhat: assertion failed: `(left != right)`\n  left: `{:?}`,\n right: `{:?}`",
+                $left, $right
+            );
+        }
+    });
+    ($left:expr, $right:expr, $($arg:tt)+) => ({
+        if dhat::check_assert_condition(|| $left != $right) {
+            panic!(
+                "dhat: assertion failed: `(left != right)`\n  left: `{:?}`,\n right: `{:?}`: {}",
+                $left, $right, format_args!($($arg)+)
+            );
+        }
+    });
 }
 
 // A Rust representation of DHAT's JSON file format, which is described in
