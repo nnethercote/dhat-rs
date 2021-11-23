@@ -343,10 +343,12 @@ impl Globals {
         self.pp_infos[pp_info_idx].update_counts_for_dealloc(size, alloc_duration);
     }
 
-    fn update_counts_for_ad_hoc_event(&mut self, weight: usize) {
+    fn update_counts_for_ad_hoc_event(&mut self, pp_info_idx: usize, weight: usize) {
         std::assert!(self.heap.is_none());
         self.total_blocks += 1;
         self.total_bytes += weight as u64;
+
+        self.pp_infos[pp_info_idx].update_counts_for_ad_hoc_event(weight);
     }
 
     // If we are at peak memory, update `at_tgmax_{blocks,bytes}` in all
@@ -951,12 +953,10 @@ pub fn ad_hoc_event(weight: usize) {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             if let Phase::During(g @ Globals { heap: None, .. }) = phase {
                 let bt = Backtrace(backtrace::Backtrace::new_unresolved());
-
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
                 // Update counts.
-                g.pp_infos[pp_info_idx].update_counts_for_ad_hoc_event(weight);
-                g.update_counts_for_ad_hoc_event(weight);
+                g.update_counts_for_ad_hoc_event(pp_info_idx, weight);
             }
         },
     );
