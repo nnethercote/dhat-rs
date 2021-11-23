@@ -1194,6 +1194,7 @@ impl AdHocStats {
     }
 }
 
+/// A function used by the `dhat::assert*` macros.
 pub fn check_assert_condition<F>(cond: F) -> bool
 where
     F: FnOnce() -> bool,
@@ -1232,7 +1233,7 @@ where
 
 /// Asserts that two expressions are equal. On failure, this macro will write
 /// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. As for `std::assert`, additional format
+/// `Profiler` is not running. Like `std::assert`, additional format
 /// arguments are supported.
 #[macro_export]
 macro_rules! assert {
@@ -1250,7 +1251,7 @@ macro_rules! assert {
 
 /// Asserts that two expressions are equal. On failure, this macro will write
 /// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. As for `std::assert_eq`, additional format
+/// `Profiler` is not running. Like `std::assert_eq`, additional format
 /// arguments are supported.
 #[macro_export]
 macro_rules! assert_eq {
@@ -1274,7 +1275,7 @@ macro_rules! assert_eq {
 
 /// Asserts that two expressions are equal. On failure, this macro will write
 /// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. As for `std::assert_ne`, additional format
+/// `Profiler` is not running. Like `std::assert_ne`, additional format
 /// arguments are supported.
 #[macro_export]
 macro_rules! assert_ne {
