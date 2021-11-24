@@ -184,6 +184,7 @@ use std::cell::Cell;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::ops::AddAssign;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
@@ -216,6 +217,12 @@ enum Phase<T> {
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
+    // The filename for the saved data.
+    filename: PathBuf,
+
+    // Are we in testing mode?
+    testing: bool,
+
     // The backtrace at startup. Used for backtrace trimmming.
     start_bt: Backtrace,
 
@@ -264,8 +271,10 @@ struct HeapGlobals {
 }
 
 impl Globals {
-    fn new(heap: Option<HeapGlobals>) -> Self {
+    fn new(testing: bool, filename: PathBuf, heap: Option<HeapGlobals>) -> Self {
         Self {
+            testing,
+            filename,
             start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
@@ -395,7 +404,7 @@ impl Globals {
 
     // Finish tracking allocations and deallocations, print a summary message
     // to `stderr` and save the profile to file/memory if requested.
-    fn finish<'m>(mut self, save_dest: &mut SaveDest<'m>) {
+    fn finish<'m>(mut self, save_to_memory: &mut Option<&'m mut String>) {
         let now = Instant::now();
 
         if self.heap.is_some() {
@@ -545,45 +554,27 @@ impl Globals {
         // indents instead of 2-space, no spaces after `:`, `fs` arrays on
         // a single line) more like what DHAT produces. But in the absence
         // of such an intermediate option, readability trumps compactness.
-        let mut filename: Option<&'static str> = None;
-        let mut save = || {
-            match save_dest {
-                SaveDest::None => {
-                    eprintln!("dhat: The data has not been saved");
-                    Ok(())
-                }
-                SaveDest::File => {
-                    filename = Some(if self.heap.is_some() {
-                        "dhat-heap.json"
-                    } else {
-                        "dhat-ad-hoc.json"
-                    });
-                    let filename = filename.unwrap();
-                    let file = File::create(filename)?;
-                    serde_json::to_writer_pretty(&file, &json)?;
+        if let Some(mem) = save_to_memory {
+            **mem = serde_json::to_string_pretty(&json).unwrap();
+            eprintln!("dhat: The data has been saved to the memory buffer");
+        } else {
+            let write = || -> std::io::Result<()> {
+                let file = File::create(&self.filename)?;
+                serde_json::to_writer_pretty(&file, &json)?;
+                Ok(())
+            };
+            match write() {
+                Ok(()) =>
                     eprintln!(
-                    "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
-                    filename
-                );
-                    Ok(())
-                }
-                SaveDest::Memory(mem) => {
-                    **mem = serde_json::to_string_pretty(&json)?;
-                    eprintln!("dhat: The data has been saved to the memory buffer");
-                    Ok(())
-                }
-            }
-        };
-        let res: std::io::Result<()> = save();
-
-        match res {
-            Ok(()) => {}
-            Err(e) => {
-                eprintln!(
-                    "dhat: error: Writing to {} failed: {}",
-                    filename.unwrap(),
-                    e
-                );
+                        "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
+                        self.filename.to_string_lossy()
+                    ),
+                Err(e) =>
+                    eprintln!(
+                        "dhat: error: Writing to {} failed: {}",
+                        self.filename.to_string_lossy(),
+                        e
+                    ),
             }
         }
     }
@@ -731,14 +722,6 @@ where
     }
 }
 
-// Where the profile is saved when the `Profiler` is dropped.
-#[derive(Debug)]
-enum SaveDest<'m> {
-    None,
-    File,
-    Memory(&'m mut String),
-}
-
 /// A type whose lifetime dictates the start and end of profiling. Created by
 /// `Profiler::heap_start()`, `Profiler::ad_hoc_start()`, or
 /// `ProfilerBuilder::start()`.
@@ -754,8 +737,10 @@ enum SaveDest<'m> {
 // `Profiler` instance being within reach.
 #[derive(Debug)]
 pub struct Profiler<'m> {
-    // Memory buffer to send output to, if requested.
-    save_dest: SaveDest<'m>,
+    // Memory buffer to send output to on drop, if requested. Stored here
+    // rather than in `Globals` because `Globals` can't hold a non-static
+    // reference.
+    save_to_memory: Option<&'m mut String>,
 }
 
 impl<'m> Profiler<'m> {
@@ -774,44 +759,50 @@ impl<'m> Profiler<'m> {
     }
 }
 
-enum ProfilerKind {
-    Heap,
-    AdHoc,
-}
-
 /// A builder for `Profiler`, for cases more complex than the basic ones
 /// covered by `Profiler::heap_start()` and `Profiler::ad_hoc_start()`.
 pub struct ProfilerBuilder<'m> {
-    kind: ProfilerKind,
-    save_dest: SaveDest<'m>,
+    ad_hoc: bool,
+    testing: bool,
+    filename: Option<PathBuf>,
+    save_to_memory: Option<&'m mut String>,
 }
 
 impl<'m> ProfilerBuilder<'m> {
     /// Creates a new `ProfilerBuilder`.
     pub fn new() -> Self {
         Self {
-            kind: ProfilerKind::Heap,
-            save_dest: SaveDest::File,
+            ad_hoc: false,
+            testing: false,
+            filename: None,
+            save_to_memory: None,
         }
     }
 
     /// Requests ad hoc profiling.
     pub fn ad_hoc(mut self) -> Self {
-        self.kind = ProfilerKind::AdHoc;
+        self.ad_hoc = true;
         self
     }
 
-    /// Requests that a profile not be saved when the profiler is dropped. This
-    /// means a profile will only be saved if a `dhat::assert*` macro call
-    /// fails.
-    pub fn save_to_none(mut self) -> Self {
-        self.save_dest = SaveDest::None;
+    /// Requests testing mode, which allows the use of `dhat::assert*`, and
+    /// disables saving of profile data on `Profiler` drop.
+    pub fn testing(mut self) -> Self {
+        self.testing = true;
         self
     }
 
-    /// Requests that a profile be saved to memory when the profiler is dropped.
+    /// Name of the file in which profiling data will be saved.
+    pub fn filename<P: AsRef<Path>>(mut self, filename: P) -> Self {
+        self.filename = Some(filename.as_ref().to_path_buf());
+        self
+    }
+
+    /// Requests that a profile be saved to memory when the profiler is
+    /// dropped. Primarily for this crate's own internal testing, and unlikely
+    /// to be useful for typical crate users.
     pub fn save_to_memory(mut self, mem: &'m mut String) -> Self {
-        self.save_dest = SaveDest::Memory(mem);
+        self.save_to_memory = Some(mem);
         self
     }
 
@@ -821,18 +812,28 @@ impl<'m> ProfilerBuilder<'m> {
             || unreachable!(),
             || {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                let h = match self.kind {
-                    ProfilerKind::Heap => Some(HeapGlobals::new()),
-                    ProfilerKind::AdHoc => None,
-                };
                 match phase {
-                    Phase::Pre => *phase = Phase::During(Globals::new(h)),
+                    Phase::Pre => {
+                        let filename = if let Some(filename) = self.filename {
+                            filename
+                        } else if !self.ad_hoc {
+                            PathBuf::from("dhat-heap.json")
+                        } else {
+                            PathBuf::from("dhat-ad-hoc.json")
+                        };
+                        let h = if !self.ad_hoc {
+                            Some(HeapGlobals::new())
+                        } else {
+                            None
+                        };
+                        *phase = Phase::During(Globals::new(self.testing, filename, h));
+                    }
                     Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
                         panic!("dhat: profiling started a second time")
                     }
                 }
                 Profiler {
-                    save_dest: self.save_dest,
+                    save_to_memory: self.save_to_memory,
                 }
             },
         )
@@ -970,7 +971,7 @@ impl<'m> Drop for Profiler<'m> {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match std::mem::replace(phase, Phase::PostDrop) {
                     Phase::Pre => unreachable!(),
-                    Phase::During(g) => g.finish(&mut self.save_dest),
+                    Phase::During(g) => if !g.testing { g.finish(&mut self.save_to_memory) },
                     Phase::PostAssert => {}
                     Phase::PostDrop => unreachable!(),
                 }
@@ -1163,10 +1164,10 @@ impl HeapStats {
             || {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match phase {
-                    Phase::Pre => panic!("dhat: getting stats before the profiler has started"),
+                    Phase::Pre => panic!("dhat: getting heap stats before the profiler has started"),
                     Phase::During(g) => g.get_heap_stats(),
                     Phase::PostAssert | Phase::PostDrop => {
-                        panic!("dhat: getting stats after the profiler has stopped")
+                        panic!("dhat: getting heap stats after the profiler has stopped")
                     }
                 }
             },
@@ -1183,10 +1184,10 @@ impl AdHocStats {
             || {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match phase {
-                    Phase::Pre => panic!("dhat: getting stats before the profiler has started"),
+                    Phase::Pre => panic!("dhat: getting ad hoc stats before the profiler has started"),
                     Phase::During(g) => g.get_ad_hoc_stats(),
                     Phase::PostAssert | Phase::PostDrop => {
-                        panic!("dhat: getting stats after the profiler has stopped")
+                        panic!("dhat: getting ad hoc stats after the profiler has stopped")
                     }
                 }
             },
@@ -1208,7 +1209,10 @@ where
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             match phase {
                 Phase::Pre => unreachable!(),
-                Phase::During(_) => {
+                Phase::During(g) => {
+                    if !g.testing {
+                        panic!("dhat: asserting while not in testing mode");
+                    }
                     if cond() {
                         return false;
                     }
@@ -1220,8 +1224,7 @@ where
             match std::mem::replace(phase, Phase::PostAssert) {
                 Phase::Pre => unreachable!(),
                 Phase::During(g) => {
-                    let mut save_dest = SaveDest::File;
-                    g.finish(&mut save_dest);
+                    g.finish(&mut None);
                     true
                 }
                 Phase::PostAssert => unreachable!(),
