@@ -484,7 +484,7 @@ impl Globals {
 
     // Finish tracking allocations and deallocations, print a summary message
     // to `stderr` and save the profile to file/memory if requested.
-    fn finish<'m>(mut self, save_to_memory: &mut Option<&'m mut String>) {
+    fn finish(mut self, save_to_memory: &mut Option<&mut String>) {
         let now = Instant::now();
 
         if self.heap.is_some() {
@@ -944,6 +944,12 @@ impl<'m> ProfilerBuilder<'m> {
                 }
             },
         )
+    }
+}
+
+impl Default for ProfilerBuilder<'_> {
+    fn default() -> Self {
+        ProfilerBuilder::new()
     }
 }
 
