@@ -156,12 +156,19 @@ fn main() {
             .is_none()
     };
     assert!(y("[root]"));
-    assert!(y("heap::main (heap.rs:36:9)")); // v3
-    assert!(y("heap::main (heap.rs:39:18)")); // v5
-    assert!(y("heap::main (heap.rs:40:22)")); // v6
-    assert!(y("heap::main (heap.rs:50:22)")); // _v7
     assert!(y("alloc::vec::Vec<T,A>::push"));
     assert!(y("alloc::vec::Vec<T,A>::reserve"));
+    if cfg!(windows) {
+        assert!(y("heap::main (heap.rs:36:0)")); // v3
+        assert!(y("heap::main (heap.rs:39:0)")); // v5
+        assert!(y("heap::main (heap.rs:40:0)")); // v6
+        assert!(y("heap::main (heap.rs:50:0)")); // _v7
+    } else {
+        assert!(y("heap::main (heap.rs:36:9)")); // v3
+        assert!(y("heap::main (heap.rs:39:18)")); // v5
+        assert!(y("heap::main (heap.rs:40:22)")); // v6
+        assert!(y("heap::main (heap.rs:50:22)")); // _v7
+    }
 
     // This stuff should be removed by backtrace trimming.
     assert!(n("backtrace::"));
