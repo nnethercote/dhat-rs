@@ -157,16 +157,21 @@ fn main() {
     };
     assert!(y("[root]"));
     if cfg!(windows) {
-        assert!(y(
-            "alloc::vec::Vec<u32,alloc::alloc::Global>::push<u32,alloc::alloc::Global>"
-        ));
-        assert!(y(
-            "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
-        ));
-        assert!(y("heap::main (heap.rs:36:0)")); // v3
-        assert!(y("heap::main (heap.rs:39:0)")); // v5
-        assert!(y("heap::main (heap.rs:40:0)")); // v6
-        assert!(y("heap::main (heap.rs:50:0)")); // _v7
+        if cfg!(debug_assertions) {
+            assert!(y(
+                "alloc::vec::Vec<u32,alloc::alloc::Global>::push<u32,alloc::alloc::Global>"
+            ));
+            assert!(y(
+                "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
+            ));
+            assert!(y("heap::main (heap.rs:36:0)")); // v3
+            assert!(y("heap::main (heap.rs:39:0)")); // v5
+            assert!(y("heap::main (heap.rs:40:0)")); // v6
+            assert!(y("heap::main (heap.rs:50:0)")); // _v7
+        } else {
+            // Stack traces are terrible in Windows release builds.
+            assert!(y("RawVec"));
+        }
     } else {
         assert!(y("alloc::vec::Vec<T,A>::push"));
         assert!(y("alloc::vec::Vec<T,A>::reserve"));
