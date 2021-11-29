@@ -641,6 +641,8 @@ impl Globals {
             let write = || -> std::io::Result<()> {
                 let file = File::create(&self.filename)?;
                 serde_json::to_writer_pretty(&file, &json)?;
+                // XXX: temporary for debugging CI test failure
+                eprintln!("json = `{}`", serde_json::to_string_pretty(&json).unwrap());
                 Ok(())
             };
             match write() {
