@@ -19,4 +19,3 @@ fn main() {
     dhat::assert_eq!(stats.curr_blocks, 2);
     dhat::assert_eq!(stats.curr_bytes, 32);
 }
-

@@ -388,7 +388,7 @@ impl Globals {
                 max_blocks: heap.max_blocks,
                 max_bytes: heap.max_bytes,
             },
-            None => panic!("dhat: called HeapStats::get() while doing ad hoc profiling"),
+            None => panic!("dhat: getting heap stats while doing ad hoc profiling"),
         }
     }
 
@@ -398,7 +398,7 @@ impl Globals {
                 total_events: self.total_blocks,
                 total_units: self.total_bytes,
             },
-            Some(_) => panic!("dhat: called AdHocStats::get() while doing heap profiling"),
+            Some(_) => panic!("dhat: getting ad hoc stats while doing heap profiling"),
         }
     }
 
@@ -564,17 +564,15 @@ impl Globals {
                 Ok(())
             };
             match write() {
-                Ok(()) =>
-                    eprintln!(
-                        "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
-                        self.filename.to_string_lossy()
-                    ),
-                Err(e) =>
-                    eprintln!(
-                        "dhat: error: Writing to {} failed: {}",
-                        self.filename.to_string_lossy(),
-                        e
-                    ),
+                Ok(()) => eprintln!(
+                    "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
+                    self.filename.to_string_lossy()
+                ),
+                Err(e) => eprintln!(
+                    "dhat: error: Writing to {} failed: {}",
+                    self.filename.to_string_lossy(),
+                    e
+                ),
             }
         }
     }
@@ -971,7 +969,11 @@ impl<'m> Drop for Profiler<'m> {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match std::mem::replace(phase, Phase::PostDrop) {
                     Phase::Pre => unreachable!(),
-                    Phase::During(g) => if !g.testing { g.finish(&mut self.save_to_memory) },
+                    Phase::During(g) => {
+                        if !g.testing {
+                            g.finish(&mut self.save_to_memory)
+                        }
+                    }
                     Phase::PostAssert => {}
                     Phase::PostDrop => unreachable!(),
                 }
@@ -1164,7 +1166,9 @@ impl HeapStats {
             || {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match phase {
-                    Phase::Pre => panic!("dhat: getting heap stats before the profiler has started"),
+                    Phase::Pre => {
+                        panic!("dhat: getting heap stats before the profiler has started")
+                    }
                     Phase::During(g) => g.get_heap_stats(),
                     Phase::PostAssert | Phase::PostDrop => {
                         panic!("dhat: getting heap stats after the profiler has stopped")
@@ -1184,7 +1188,9 @@ impl AdHocStats {
             || {
                 let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
                 match phase {
-                    Phase::Pre => panic!("dhat: getting ad hoc stats before the profiler has started"),
+                    Phase::Pre => {
+                        panic!("dhat: getting ad hoc stats before the profiler has started")
+                    }
                     Phase::During(g) => g.get_ad_hoc_stats(),
                     Phase::PostAssert | Phase::PostDrop => {
                         panic!("dhat: getting ad hoc stats after the profiler has stopped")
@@ -1208,7 +1214,7 @@ where
         || {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             match phase {
-                Phase::Pre => unreachable!(),
+                Phase::Pre => panic!("dhat: asserting before the profiler has started"),
                 Phase::During(g) => {
                     if !g.testing {
                         panic!("dhat: asserting while not in testing mode");
@@ -1217,8 +1223,8 @@ where
                         return false;
                     }
                 }
-                Phase::PostAssert => panic!("dhat: asserting after the profiler has stopped"),
-                Phase::PostDrop => unreachable!(),
+                Phase::PostAssert => panic!("dhat: asserting after the profiler has asserted"),
+                Phase::PostDrop => panic!("dhat: asserting after the profiler has stopped"),
             }
             // Failure.
             match std::mem::replace(phase, Phase::PostAssert) {
@@ -1439,5 +1445,22 @@ impl AddAssign<Delta> for u64 {
         } else {
             *self += rhs.size as u64;
         }
+    }
+}
+
+// For testing purposes only.
+#[doc(hidden)]
+pub fn assert_is_panic<R, F: FnOnce() -> R + std::panic::UnwindSafe>(f: F, expected: &str) {
+    let res = std::panic::catch_unwind(f);
+    if let Err(err) = res {
+        if let Some(actual) = err.downcast_ref::<&str>() {
+            std::assert_eq!(expected, *actual);
+        } else if let Some(actual) = err.downcast_ref::<String>() {
+            std::assert_eq!(expected, actual);
+        } else {
+            panic!("match_panic: Not a string: {:?}", err);
+        }
+    } else {
+        panic!("match_panic: Not an error");
     }
 }
