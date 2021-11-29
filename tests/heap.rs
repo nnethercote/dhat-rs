@@ -15,6 +15,7 @@ fn main() {
     {
         let _profiler = dhat::ProfilerBuilder::new()
             .save_to_memory(&mut mem)
+            .eprint_json()
             .build();
 
         // Things allocated beforehand aren't counted.
@@ -155,10 +156,10 @@ fn main() {
             .is_none()
     };
     assert!(y("[root]"));
-    assert!(y("heap::main (heap.rs:35:9)")); // v3
-    assert!(y("heap::main (heap.rs:38:18)")); // v5
-    assert!(y("heap::main (heap.rs:39:22)")); // v6
-    assert!(y("heap::main (heap.rs:49:22)")); // _v7
+    assert!(y("heap::main (heap.rs:36:9)")); // v3
+    assert!(y("heap::main (heap.rs:39:18)")); // v5
+    assert!(y("heap::main (heap.rs:40:22)")); // v6
+    assert!(y("heap::main (heap.rs:50:22)")); // _v7
     assert!(y("alloc::vec::Vec<T,A>::push"));
     assert!(y("alloc::vec::Vec<T,A>::reserve"));
 

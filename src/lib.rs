@@ -303,6 +303,9 @@ struct Globals {
     // Are we in testing mode?
     testing: bool,
 
+    // Print the JSON to stderr when saving it?
+    eprint_json: bool,
+
     // The backtrace at startup. Used for backtrace trimmming.
     start_bt: Backtrace,
 
@@ -351,10 +354,11 @@ struct HeapGlobals {
 }
 
 impl Globals {
-    fn new(testing: bool, filename: PathBuf, heap: Option<HeapGlobals>) -> Self {
+    fn new(testing: bool, filename: PathBuf, eprint_json: bool, heap: Option<HeapGlobals>) -> Self {
         Self {
             testing,
             filename,
+            eprint_json,
             start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
@@ -641,8 +645,6 @@ impl Globals {
             let write = || -> std::io::Result<()> {
                 let file = File::create(&self.filename)?;
                 serde_json::to_writer_pretty(&file, &json)?;
-                // XXX: temporary for debugging CI test failure
-                eprintln!("json = `{}`", serde_json::to_string_pretty(&json).unwrap());
                 Ok(())
             };
             match write() {
@@ -656,6 +658,12 @@ impl Globals {
                     e
                 ),
             }
+        }
+        if self.eprint_json {
+            eprintln!(
+                "dhat: json = `{}`",
+                serde_json::to_string_pretty(&json).unwrap()
+            );
         }
     }
 }
@@ -855,6 +863,7 @@ pub struct ProfilerBuilder<'m> {
     testing: bool,
     filename: Option<PathBuf>,
     save_to_memory: Option<&'m mut String>,
+    eprint_json: bool,
 }
 
 impl<'m> ProfilerBuilder<'m> {
@@ -865,6 +874,7 @@ impl<'m> ProfilerBuilder<'m> {
             testing: false,
             filename: None,
             save_to_memory: None,
+            eprint_json: false,
         }
     }
 
@@ -911,6 +921,14 @@ impl<'m> ProfilerBuilder<'m> {
         self
     }
 
+    // For testing purposes only. Useful for seeing what went wrong if a test
+    // fails on CI.
+    #[doc(hidden)]
+    pub fn eprint_json(mut self) -> Self {
+        self.eprint_json = true;
+        self
+    }
+
     /// Creates a [`Profiler`] from the builder.
     ///
     /// # Panics
@@ -935,7 +953,12 @@ impl<'m> ProfilerBuilder<'m> {
                         } else {
                             None
                         };
-                        *phase = Phase::During(Globals::new(self.testing, filename, h));
+                        *phase = Phase::During(Globals::new(
+                            self.testing,
+                            filename,
+                            self.eprint_json,
+                            h,
+                        ));
                     }
                     Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
                         panic!("dhat: profiling started a second time")

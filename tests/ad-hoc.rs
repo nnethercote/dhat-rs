@@ -20,6 +20,7 @@ fn main() {
         let _profiler = dhat::ProfilerBuilder::new()
             .ad_hoc()
             .save_to_memory(&mut mem)
+            .eprint_json()
             .build();
 
         let empty_stats = dhat::AdHocStats {
@@ -131,8 +132,8 @@ fn main() {
     assert!(y("ad_hoc::f2 (ad-hoc.rs:6:5)"));
     assert!(y("ad_hoc::f1 (ad-hoc.rs:10:5)"));
     assert!(y("ad_hoc::f1 (ad-hoc.rs:11:5)"));
-    assert!(y("ad_hoc::main (ad-hoc.rs:31:9)"));
     assert!(y("ad_hoc::main (ad-hoc.rs:32:9)"));
+    assert!(y("ad_hoc::main (ad-hoc.rs:33:9)"));
     assert!(y("dhat::ad_hoc_event"));
 
     // This stuff should be removed by backtrace trimming.
