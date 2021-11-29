@@ -156,14 +156,16 @@ fn main() {
             .is_none()
     };
     assert!(y("[root]"));
-    assert!(y("alloc::vec::Vec<T,A>::push"));
-    assert!(y("alloc::vec::Vec<T,A>::reserve"));
     if cfg!(windows) {
+        assert!(y("alloc::vec::Vec<u32,alloc::alloc::Global>::push<u32,alloc::alloc::Global>"));
+        assert!(y("alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"));
         assert!(y("heap::main (heap.rs:36:0)")); // v3
         assert!(y("heap::main (heap.rs:39:0)")); // v5
         assert!(y("heap::main (heap.rs:40:0)")); // v6
         assert!(y("heap::main (heap.rs:50:0)")); // _v7
     } else {
+        assert!(y("alloc::vec::Vec<T,A>::push"));
+        assert!(y("alloc::vec::Vec<T,A>::reserve"));
         assert!(y("heap::main (heap.rs:36:9)")); // v3
         assert!(y("heap::main (heap.rs:39:18)")); // v5
         assert!(y("heap::main (heap.rs:40:22)")); // v6
