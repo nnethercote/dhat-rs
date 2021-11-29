@@ -157,8 +157,12 @@ fn main() {
     };
     assert!(y("[root]"));
     if cfg!(windows) {
-        assert!(y("alloc::vec::Vec<u32,alloc::alloc::Global>::push<u32,alloc::alloc::Global>"));
-        assert!(y("alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"));
+        assert!(y(
+            "alloc::vec::Vec<u32,alloc::alloc::Global>::push<u32,alloc::alloc::Global>"
+        ));
+        assert!(y(
+            "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
+        ));
         assert!(y("heap::main (heap.rs:36:0)")); // v3
         assert!(y("heap::main (heap.rs:39:0)")); // v5
         assert!(y("heap::main (heap.rs:40:0)")); // v6
