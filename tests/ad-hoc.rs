@@ -1,11 +1,13 @@
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
+#[inline(never)]
 fn f2() {
     dhat::ad_hoc_event(1);
     dhat::ad_hoc_event(2);
 }
 
+#[inline(never)]
 fn f1() {
     f2();
     dhat::ad_hoc_event(3);
@@ -130,19 +132,20 @@ fn main() {
     assert!(y("[root]"));
     assert!(y("dhat::ad_hoc_event"));
     if cfg!(windows) {
-        assert!(y("ad_hoc::f2 (ad-hoc.rs:5:0)"));
+        // Some frames are missing on Windows, possibly inline frames?
         assert!(y("ad_hoc::f2 (ad-hoc.rs:6:0)"));
-        assert!(y("ad_hoc::f1 (ad-hoc.rs:10:0)"));
-        assert!(y("ad_hoc::f1 (ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:32:0)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:33:0)"));
+        assert!(y("ad_hoc::f2 (ad-hoc.rs:7:0)"));
+        assert!(y("ad_hoc::f1 (ad-hoc.rs:12:0)"));
+        assert!(y("ad_hoc::f1 (ad-hoc.rs:13:0)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:34:0)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:35:0)"));
     } else {
-        assert!(y("ad_hoc::f2 (ad-hoc.rs:5:5)"));
         assert!(y("ad_hoc::f2 (ad-hoc.rs:6:5)"));
-        assert!(y("ad_hoc::f1 (ad-hoc.rs:10:5)"));
-        assert!(y("ad_hoc::f1 (ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:32:9)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:33:9)"));
+        assert!(y("ad_hoc::f2 (ad-hoc.rs:7:5)"));
+        assert!(y("ad_hoc::f1 (ad-hoc.rs:12:5)"));
+        assert!(y("ad_hoc::f1 (ad-hoc.rs:13:5)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:34:9)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:35:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
