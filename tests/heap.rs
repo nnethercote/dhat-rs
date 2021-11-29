@@ -133,7 +133,7 @@ fn main() {
     let pp3 = &pps[3];
     assert_eq!(pp3["tb"].as_i64().unwrap(), 10);
     assert_eq!(pp3["tbk"].as_i64().unwrap(), 10);
-    assert!(pp3["tl"].as_i64().unwrap() > 0);
+    assert!(pp3["tl"].as_i64().unwrap() >= 0);
     assert_eq!(pp3["mb"].as_i64().unwrap(), 1);
     assert_eq!(pp3["mbk"].as_i64().unwrap(), 1);
     assert_eq!(pp3["gb"].as_i64().unwrap(), 0);
