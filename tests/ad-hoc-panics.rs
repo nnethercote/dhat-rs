@@ -14,10 +14,10 @@ fn main() {
     );
 
     {
-        let _profiler = dhat::Profiler::ad_hoc_start();
+        let _profiler = dhat::Profiler::new_ad_hoc();
 
         dhat::assert_is_panic(
-            || dhat::Profiler::ad_hoc_start(),
+            || dhat::Profiler::new_ad_hoc(),
             "dhat: profiling started a second time",
         );
 

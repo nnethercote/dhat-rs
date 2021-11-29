@@ -17,10 +17,10 @@ fn main() {
     );
 
     {
-        let _profiler = dhat::Profiler::heap_start();
+        let _profiler = dhat::Profiler::new_heap();
 
         dhat::assert_is_panic(
-            || dhat::Profiler::heap_start(),
+            || dhat::Profiler::new_heap(),
             "dhat: profiling started a second time",
         );
 

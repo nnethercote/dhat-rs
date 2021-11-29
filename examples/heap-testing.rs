@@ -10,7 +10,7 @@
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 fn main() {
-    let _profiler = dhat::ProfilerBuilder::new().testing().start();
+    let _profiler = dhat::ProfilerBuilder::new().testing().build();
 
     let _v1 = vec![1, 2, 3, 4];
     let _v2 = vec![5, 6, 7, 8];

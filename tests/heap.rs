@@ -15,7 +15,7 @@ fn main() {
     {
         let _profiler = dhat::ProfilerBuilder::new()
             .save_to_memory(&mut mem)
-            .start();
+            .build();
 
         // Things allocated beforehand aren't counted.
         let empty_stats = dhat::HeapStats {

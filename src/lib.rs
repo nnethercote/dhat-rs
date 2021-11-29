@@ -1,3 +1,6 @@
+#![deny(missing_docs)]
+#![deny(rustdoc::missing_doc_code_examples)]
+
 //! This crate provides heap profiling and ad hoc profiling capabilities to
 //! Rust programs, similar to those provided by [DHAT].
 //!
@@ -11,6 +14,10 @@
 //! The ad hoc profiling is via a second mode of operation, where ad hoc events
 //! can be manually inserted into a Rust program for aggregation and viewing.
 //! This corresponds to DHAT's `--mode=ad-hoc` mode.
+//!
+//! `dhat` also supports *heap usage testing*, where you can write tests and
+//! then check that they allocated as much heap memory as you expected. This
+//! can be useful for performance-sensitive code.
 //!
 //! # Motivation
 //!
@@ -42,7 +49,7 @@
 //! debug = 1
 //! ```
 //!
-//! # Usage (heap profiling)
+//! # Setup (heap profiling)
 //!
 //! For heap profiling, enable the global allocator by adding this code to your
 //! program:
@@ -52,12 +59,14 @@
 //! ```
 //! Then add the following code to the very start of your `main` function:
 //! ```
-//! let _profiler = dhat::Profiler::heap_start();
+//! let _profiler = dhat::Profiler::new_heap();
 //! ```
-//! `dhat::Alloc` is slower than the system allocator, so it should only be
-//! enabled while profiling.
+//! Profiling will occur during the lifetime of the [`Profiler`] instance.
 //!
-//! # Usage (ad hoc profiling)
+//! [`dhat::Alloc`](Alloc) is slower than the system allocator, so it should
+//! only be enabled while profiling.
+//!
+//! # Setup (ad hoc profiling)
 //!
 //! [Ad hoc profiling] involves manually annotating hot code points and then
 //! aggregating the executed annotations in some fashion.
@@ -67,7 +76,7 @@
 //! To do this, add the following code to the very start of your `main`
 //! function:
 //!```
-//! let _profiler = dhat::Profiler::ad_hoc_start();
+//! let _profiler = dhat::Profiler::new_ad_hoc();
 //! ```
 //! Then insert calls like this at points of interest:
 //! ```
@@ -75,9 +84,10 @@
 //! ```
 //! For example, imagine you have a hot function that is called from many call
 //! sites. You might want to know how often it is called and which other
-//! functions called it the most. In that case, you would add a `ad_hoc_event`
-//! call to that function, and the data collected by this crate and viewed with
-//! DHAT's viewer would show you exactly what you want to know.
+//! functions called it the most. In that case, you would add an
+//! [`ad_hoc_event`] call to that function, and the data collected by this
+//! crate and viewed with DHAT's viewer would show you exactly what you want to
+//! know.
 //!
 //! The meaning of the integer argument to `ad_hoc_event` will depend on
 //! exactly what you are measuring. If there is no meaningful weight to give to
@@ -90,15 +100,17 @@
 //! slowly. This is because backtrace gathering can be drastically slower on
 //! Windows than on other platforms.)
 //!
-//! When the `Profiler` is dropped at the end of `main`, some basic information
-//! will be printed to `stderr`. For heap profiling it will look like the
-//! following.
+//! When the [`Profiler`] is dropped at the end of `main`, some basic
+//! information will be printed to `stderr`. For heap profiling it will look
+//! like the following.
 //! ```text
 //! dhat: Total:     1,256 bytes in 6 blocks
 //! dhat: At t-gmax: 1,256 bytes in 6 blocks
 //! dhat: At t-end:  1,256 bytes in 6 blocks
 //! dhat: The data has been saved to dhat-heap.json, and is viewable with dhat/dh_view.html
 //! ```
+//! ("Blocks" is a synonym for "allocations".)
+//!
 //! For ad hoc profiling it will look like the following.
 //! ```text
 //! dhat: Total:     141 units in 11 events
@@ -108,9 +120,27 @@
 //! (for ad hoc profiling) will be written. It can be viewed in DHAT's viewer.
 //!
 //! If you don't see this output, it may be because your program called
-//! `std::process::exit`, which terminates a program without running any
+//! [`std::process::exit`], which terminates a program without running any
 //! destructors. To work around this, explicitly call `drop` on the `Profiler`
-//! value just before the call to `std::process:exit`.
+//! value just before the call to [`std::process::exit`].
+//!
+//! When doing heap profiling, if you expectedly see zero allocations in the
+//! output it may be because you forgot to set [`dhat::Alloc`](Alloc) as the
+//! global allocator.
+//!
+//! When doing heap profiling it is recommended that the scope of the
+//! [`Profiler`] value cover all of `main`. But it is still possible for
+//! allocations and deallocations to occur outside of its lifetime. Such cases
+//! are handled in the following ways.
+//! - Allocated before, untouched within: ignored.
+//! - Allocated before, freed within: ignored.
+//! - Allocated before, reallocated within: treated like a new allocation
+//!   within.
+//! - Allocated after: ignored.
+//!
+//! These cases are not ideal, but it is impossible to do better. `dhat`
+//! deliberately provides no way to reset the heap profiling state mid-run
+//! precisely because it leaves open the possibility of many such occurrences.
 //!
 //! # Viewing
 //!
@@ -173,6 +203,56 @@
 //!   backtrace. That frame may be a function within `alloc::alloc`, a function
 //!   within this crate, or a global allocation function like `__rg_alloc`.
 //! - Common frames at the bottom of backtraces, below `main`, are omitted.
+//!
+//! # Heap usage testing
+//!
+//! Sometimes you might want to write a test that checks that a certain piece
+//! of code does a certain amount of allocation when it runs. This is sometimes
+//! called "high water mark" testing. `dhat` facilitates this.
+//!
+//! Each such test needs to be in a separate integration test in your crate's
+//! `tests/` directory. (It cannot be within a unit test, and there cannot be
+//! more than one heap usage test per integration test, because heap profiling
+//! involves global state and multiple tests within the same process will
+//! interfere with each other.)
+//!
+//! Your test file will look something like this:
+//! ```
+//! #[global_allocator]
+//! static ALLOC: dhat::Alloc = dhat::Alloc;
+//!
+//! # fn main() {}
+//! #[test]
+//! fn main() {
+//!     let _profiler = dhat::ProfilerBuilder::new().testing().build();
+//!
+//!     // Replace this with your code of interest.
+//!     let _v1 = vec![1, 2, 3, 4];
+//!     let _v2 = vec![5, 6, 7, 8];
+//!
+//!     let stats = dhat::HeapStats::get();
+//!     dhat::assert_eq!(stats.curr_blocks, 2);
+//!     dhat::assert_eq!(stats.curr_bytes, 32);
+//! }
+//! ```
+//! The [`testing`](ProfilerBuilder::testing) call puts the profiler into
+//! testing mode, which allows the stats provided by the [`HeapStats::get`]
+//! function to be checked with [`dhat::assert!`](assert) and similar
+//! assertions. These assertions work much the same as normal assertions,
+//! except that if any of them fail a heap profile will be saved, which can be
+//! viewed with DHAT's viewer. Selecting the "At t-end (bytes)" sort metric in
+//! the viewer may be useful, because it sorts the shown program points by the
+//! number of bytes allocated when the profiling ended, i.e. when the assertion
+//! failed. This should give you a good idea of why the allocations don't match
+//! the assertion.
+//!
+//! # Ad hoc usage testing
+//!
+//! Ad hoc usage testing is also possible. It can be used to ensure certain
+//! code points in your program are hit a particular number of times during
+//! execution. It works in much the same way as heap usage testing, but
+//! [`ProfilerBuilder::ad_hoc`] must be specified, and [`AdHocStats::get`] is
+//! used instead of [`HeapStats::get`].
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
@@ -720,15 +800,14 @@ where
     }
 }
 
-/// A type whose lifetime dictates the start and end of profiling. Created by
-/// `Profiler::heap_start()`, `Profiler::ad_hoc_start()`, or
-/// `ProfilerBuilder::start()`.
+/// A type whose lifetime dictates the start and end of profiling.
 ///
-/// Profiling stops when (a) this value is dropped or (b) a `dhat` assertion
-/// fails, whichever comes first. When that happens, profiling data may be
-/// written to file, depending on how the `Profiler` has been configured. Only
-/// one instance of this type can be created. A panic will occur if a second
-/// value of this type is created.
+/// Profiling starts when the first value of this type is created. Profiling
+/// stops when (a) this value is dropped or (b) a `dhat` assertion fails,
+/// whichever comes first. When that happens, profiling data may be written to
+/// file, depending on how the `Profiler` has been configured. Only one
+/// instance of this type can be created. A panic will occur if a second value
+/// of this type is created.
 //
 // Much of the actual profiler state is stored in `Globals`, so it can be
 // accessed from places like `Alloc::alloc` and `ad_hoc_event()`without the
@@ -742,23 +821,33 @@ pub struct Profiler<'m> {
 }
 
 impl<'m> Profiler<'m> {
-    /// Initiates allocation profiling. Typically the first thing in `main`, and
-    /// its result should be assigned to a variable whose scope ends at the end of
-    /// `main`. Panics if another `Profiler` has been created previously.
-    pub fn heap_start() -> Self {
-        ProfilerBuilder::new().start()
+    /// Initiates allocation profiling.
+    ///
+    /// Typically the first thing in `main`, and its result should be assigned
+    /// to a variable whose scope ends at the end of `main`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another `Profiler` has been created previously.
+    pub fn new_heap() -> Self {
+        ProfilerBuilder::new().build()
     }
 
-    /// Initiates ad hoc profiling. Typically the first thing in `main`, and its
-    /// result should be assigned to a variable whose scope ends at the end of
-    /// `main`. Panics if another `Profiler` has been created previously.
-    pub fn ad_hoc_start() -> Self {
-        ProfilerBuilder::new().ad_hoc().start()
+    /// Initiates ad hoc profiling.
+    ///
+    /// Typically the first thing in `main`, and its result should be assigned
+    /// to a variable whose scope ends at the end of `main`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if another `Profiler` has been created previously.
+    pub fn new_ad_hoc() -> Self {
+        ProfilerBuilder::new().ad_hoc().build()
     }
 }
 
-/// A builder for `Profiler`, for cases more complex than the basic ones
-/// covered by `Profiler::heap_start()` and `Profiler::ad_hoc_start()`.
+/// A builder for [`Profiler`], for cases more complex than the basic ones
+/// provided by the functions within [`Profiler`].
 pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
@@ -767,7 +856,7 @@ pub struct ProfilerBuilder<'m> {
 }
 
 impl<'m> ProfilerBuilder<'m> {
-    /// Creates a new `ProfilerBuilder`.
+    /// Creates a new `ProfilerBuilder`, which defaults to heap profiling.
     pub fn new() -> Self {
         Self {
             ad_hoc: false,
@@ -778,34 +867,54 @@ impl<'m> ProfilerBuilder<'m> {
     }
 
     /// Requests ad hoc profiling.
+    ///
+    /// # Examples
+    /// ```
+    /// let _profiler = dhat::ProfilerBuilder::new().ad_hoc().build();
+    /// ```
     pub fn ad_hoc(mut self) -> Self {
         self.ad_hoc = true;
         self
     }
 
-    /// Requests testing mode, which allows the use of `dhat::assert*`, and
-    /// disables saving of profile data on `Profiler` drop.
+    /// Requests testing mode, which allows the use of
+    /// [`dhat::assert!`](assert) and related macros, and disables saving of
+    /// profile data on [`Profiler`] drop.
+    ///
+    /// # Examples
+    /// ```
+    /// let _profiler = dhat::ProfilerBuilder::new().testing().build();
+    /// ```
     pub fn testing(mut self) -> Self {
         self.testing = true;
         self
     }
 
     /// Name of the file in which profiling data will be saved.
+    ///
+    /// # Examples
+    /// ```
+    /// let filename = format!("heap-{}.json", std::process::id());
+    /// let _profiler = dhat::ProfilerBuilder::new().filename(filename).build();
+    /// ```
     pub fn filename<P: AsRef<Path>>(mut self, filename: P) -> Self {
         self.filename = Some(filename.as_ref().to_path_buf());
         self
     }
 
-    /// Requests that a profile be saved to memory when the profiler is
-    /// dropped. Primarily for this crate's own internal testing, and unlikely
-    /// to be useful for typical crate users.
+    // For testing purposes only.
+    #[doc(hidden)]
     pub fn save_to_memory(mut self, mem: &'m mut String) -> Self {
         self.save_to_memory = Some(mem);
         self
     }
 
-    /// Creates a `Profiler` from the builder.
-    pub fn start(self) -> Profiler<'m> {
+    /// Creates a [`Profiler`] from the builder.
+    ///
+    /// # Panics
+    ///
+    /// Panics if a [`Profiler`] has been created previously.
+    pub fn build(self) -> Profiler<'m> {
         if_ignoring_allocs_else(
             || unreachable!(),
             || {
@@ -942,9 +1051,10 @@ unsafe impl GlobalAlloc for Alloc {
     }
 }
 
-/// Register an event during ad hoc profiling. The meaning of the weight
-/// argument is determined by the user. Has no effect if called when a
-/// `Profiler` is not running or not doing ad hoc profiling.
+/// Register an event during ad hoc profiling.
+///
+/// The meaning of the weight argument is determined by the user. Has no effect
+/// if called when a `Profiler` is not running or not doing ad hoc profiling.
 pub fn ad_hoc_event(weight: usize) {
     if_ignoring_allocs_else(
         || unreachable!(),
@@ -1125,29 +1235,29 @@ impl Hash for Backtrace {
     }
 }
 
-/// Some stats from heap profiling.
+/// Stats from heap profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HeapStats {
-    /// Number of blocks allocated over the entire run.
+    /// Number of blocks (a.k.a. allocations) allocated over the entire run.
     pub total_blocks: u64,
 
     /// Number of bytes allocated over the entire run.
     pub total_bytes: u64,
 
-    /// Number of blocks currently allocated.
+    /// Number of blocks (a.k.a. allocations) currently allocated.
     pub curr_blocks: usize,
 
     /// Number of bytes currently allocated.
     pub curr_bytes: usize,
 
-    /// Number of blocks allocated at the global peak.
+    /// Number of blocks (a.k.a. allocations) allocated at the global peak.
     pub max_blocks: usize,
 
     /// Number of bytes allocated at the global peak.
     pub max_bytes: usize,
 }
 
-/// Some stats from ad hoc profiling.
+/// Stats from ad hoc profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AdHocStats {
     /// Number of events recorded for the entire run.
@@ -1157,9 +1267,13 @@ pub struct AdHocStats {
     pub total_units: u64,
 }
 
-/// Gets current heap stats. Panics if called when a `Profiler` is not running
-/// or not doing heap profiling.
 impl HeapStats {
+    /// Gets the current heap stats.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called when a `Profiler` is not running or not doing heap
+    /// profiling.
     pub fn get() -> Self {
         if_ignoring_allocs_else(
             || unreachable!(),
@@ -1179,9 +1293,13 @@ impl HeapStats {
     }
 }
 
-/// Gets current ad hoc stats. Panics if called when a `Profiler` is not
-/// running or not doing ad hoc profiling.
 impl AdHocStats {
+    /// Gets the current ad hoc stats.
+    ///
+    /// # Panics
+    ///
+    /// Panics if called when a `Profiler` is not running or not doing ad hoc
+    /// profiling.
     pub fn get() -> Self {
         if_ignoring_allocs_else(
             || unreachable!(),
@@ -1201,7 +1319,8 @@ impl AdHocStats {
     }
 }
 
-/// A function used by the `dhat::assert*` macros.
+// Just an implementation detail of the assert macros.
+#[doc(hidden)]
 pub fn check_assert_condition<F>(cond: F) -> bool
 where
     F: FnOnce() -> bool,
@@ -1240,10 +1359,18 @@ where
     )
 }
 
-/// Asserts that two expressions are equal. On failure, this macro will write
-/// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. Like `std::assert`, additional format
-/// arguments are supported.
+/// Asserts that an expression is true.
+///
+/// Like [`std::assert!`], additional format arguments are supported. On
+/// failure, this macro will write the current profile state to file and panic.
+///
+/// # Panics
+///
+/// Panics (in a manner different to a standard assertion failure) if called
+/// when a [`Profiler`] is not running or is not in testing mode.
+///
+/// Panics if called after a previous `dhat` assertion has failed, which is
+/// possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert {
     ($cond:expr) => ({
@@ -1258,10 +1385,18 @@ macro_rules! assert {
     });
 }
 
-/// Asserts that two expressions are equal. On failure, this macro will write
-/// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. Like `std::assert_eq`, additional format
-/// arguments are supported.
+/// Asserts that two expressions are equal.
+///
+/// Like [`std::assert_eq!`], additional format arguments are supported. On failure,
+/// this macro will write the current profile state to file and panic.
+///
+/// # Panics
+///
+/// Panics (in a manner different to a standard assertion failure) if called
+/// when a [`Profiler`] is not running or is not in testing mode.
+///
+/// Panics if called after a previous `dhat` assertion has failed, which is
+/// possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert_eq {
     ($left:expr, $right:expr $(,)?) => ({
@@ -1282,10 +1417,18 @@ macro_rules! assert_eq {
     });
 }
 
-/// Asserts that two expressions are equal. On failure, this macro will write
-/// the current profile state to file and panic. Also panics if called when a
-/// `Profiler` is not running. Like `std::assert_ne`, additional format
-/// arguments are supported.
+/// Asserts that two expressions are not equal.
+///
+/// Like [`std::assert_ne!`], additional format arguments are supported. On failure,
+/// this macro will write the current profile state to file and panic.
+///
+/// # Panics
+///
+/// Panics (in a manner different to a standard assertion failure) if called
+/// when a [`Profiler`] is not running or is not in testing mode.
+///
+/// Panics if called after a previous `dhat` assertion has failed, which is
+/// possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert_ne {
     ($left:expr, $right:expr) => ({

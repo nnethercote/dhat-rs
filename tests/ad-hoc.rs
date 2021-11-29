@@ -20,7 +20,7 @@ fn main() {
         let _profiler = dhat::ProfilerBuilder::new()
             .ad_hoc()
             .save_to_memory(&mut mem)
-            .start();
+            .build();
 
         let empty_stats = dhat::AdHocStats {
             total_events: 0,
