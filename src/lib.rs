@@ -528,8 +528,13 @@ impl Globals {
                 // symbol names, line numbers, etc.
                 bt.0.resolve();
 
-                let first_symbol_to_show = first_symbol_to_show(&bt);
-                let last_frame_ip_to_show = last_frame_ip_to_show(&bt, &self.start_bt);
+                // Trim boring frames at the top and bottom of the backtrace.
+                let first_symbol_to_show = if self.heap.is_some() {
+                    bt.first_heap_symbol_to_show()
+                } else {
+                    bt.first_ad_hoc_symbol_to_show()
+                };
+                let last_frame_ip_to_show = bt.last_frame_ip_to_show(&self.start_bt);
 
                 // Determine the frame indices for this backtrace. This
                 // involves getting the string for each frame and adding a
@@ -544,9 +549,8 @@ impl Globals {
                             continue;
                         }
                         let s = format!(
-                            // Use `{:#}` rather than `{}` to print the
-                            // "alternate" form of the symbol name, which
-                            // omits the trailing hash (e.g.
+                            // Use `{:#}` to print the "alternate" form of the
+                            // symbol name, which omits the trailing hash (e.g.
                             // `::ha68e4508a38cc95a`).
                             "{:?}: {:#} ({:#}:{}:{})",
                             frame.ip(),
@@ -1124,120 +1128,151 @@ impl<'m> Drop for Profiler<'m> {
     }
 }
 
-// The top frame symbols in a backtrace vary significantly (depending on build
-// configuration, platform, and program point). Some examples:
-//
-// Linux, debug and release (Nov 2021)
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-// - dhat::if_ignoring_allocs_else
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-// - __rg_alloc
-// - alloc::alloc::alloc
-// - alloc::alloc::Global::alloc_impl
-// - <alloc::alloc::Global as core::alloc::Allocator>::allocate
-// - alloc::alloc::exchange_malloc              // sometimes missing
-// - [allocation point in program being profiled]
-//
-// Mac, debug (Nov 2021)
-// - [...backtrace library frames...]
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-// - dhat::if_ignoring_allocs_else
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-// - __rg_alloc
-// - alloc::alloc::alloc
-// - alloc::alloc::Global::alloc_impl
-// - <alloc::alloc::Global as core::alloc::Allocator>::allocate
-// - alloc::alloc::exchange_malloc              // sometimes missing
-// - [allocation point in program being profiled]
-//
-// Mac, release (Nov 2021)
-// - [...backtrace library frames...]
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-// - dhat::if_ignoring_allocs_else
-// - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-// - alloc::alloc::alloc                        // sometimes missing
-// - [allocation point in program being profiled]
-//
-// Such frames are boring and clog up the output. So we scan backwards for the
-// first frame that looks like it comes from allocator code. We keep that
-// frame, but discard everything before it. If we don't find any such frames,
-// we show from frame 0, i.e. all frames.
-//
-// Note: this is a little dangerous. When deciding if a new backtrace has been
-// seen before, we consider all the IP addresses within it. And the now we trim
-// some of those. It's possible that this will result in some previously
-// distinct traces becoming the same, which makes dh_view.html abort. If that
-// ever happens, look to see if something is going wrong here.
-fn first_symbol_to_show(bt: &Backtrace) -> usize {
-    // Get the symbols into a vector so we can reverse iterate over them.
-    let symbols: Vec<_> =
-        bt.0.frames()
-            .iter()
-            .map(|f| f.symbols().iter())
-            .flatten()
-            .collect();
-
-    for (i, symbol) in symbols.iter().enumerate().rev() {
-        if let Some(s) = symbol.name().map(|name| name.to_string()) {
-            // Examples of symbols that this search will match:
-            // - alloc::alloc::{alloc,realloc,exchange_malloc}
-            // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
-            // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-            // - __rg_{alloc,realloc}
-            if s.starts_with("alloc::alloc::")
-                || s.starts_with("<alloc::alloc::")
-                || s.starts_with("<dhat::Alloc")
-                || s.starts_with("__rg_")
-            {
-                return i;
-            }
-        }
-    }
-    0
-}
-
-// The bottom frame symbols in a backtrace (those below `main`) are typically
-// the same, and look something like this:
-// - main
-// - core::ops::function::FnOnce::call_once (function.rs:227:5)
-// - std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
-// - std::rt::lang_start::{{closure}} (rt.rs:66:18)
-// - core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once (function.rs:259:13)
-// - std::panicking::try::do_call (panicking.rs:373:40)
-// - std::panicking::try (panicking.rs:337:19)
-// - std::panic::catch_unwind (panic.rs:379:14)
-// - std::rt::lang_start_internal (rt.rs:51:25)
-// - std::rt::lang_start (rt.rs:65:5)
-// - _main (???:0:0)
-//
-// Such frames are boring and clog up the output. So we compare the bottom
-// frames with those obtained when the `Globals` value was created. Those that
-// overlap in the two cases are the common, uninteresting ones, and we discard
-// them.
-//
-// Note: this is a little dangerous. See the comment on `first_symbol_to_show()`
-// above for more detail.
-fn last_frame_ip_to_show(bt: &Backtrace, start_bt: &Backtrace) -> Option<*mut std::ffi::c_void> {
-    let bt_frames = bt.0.frames();
-    let start_bt_frames = start_bt.0.frames();
-    let (mut i, mut j) = (bt_frames.len() - 1, start_bt_frames.len() - 1);
-    loop {
-        if bt_frames[i].ip() != start_bt_frames[j].ip() {
-            return Some(bt_frames[i].ip());
-        }
-        if i == 0 || j == 0 {
-            return None;
-        }
-        i -= 1;
-        j -= 1;
-    }
-}
-
 // A wrapper for `backtrace::Backtrace` that implements `Eq` and `Hash`, which
 // only look at the frame IPs. This assumes that any two
 // `backtrace::Backtrace`s with the same frame IPs are equivalent.
 #[derive(Debug)]
 struct Backtrace(backtrace::Backtrace);
+
+impl Backtrace {
+    // The top frame symbols in a heap profiling backtrace vary significantly
+    // (depending on build configuration, platform, and program point). Some
+    // examples:
+    //
+    // Linux, debug and release (Nov 2021)
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+    // - dhat::if_ignoring_allocs_else
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
+    // - __rg_alloc
+    // - alloc::alloc::alloc
+    // - alloc::alloc::Global::alloc_impl
+    // - <alloc::alloc::Global as core::alloc::Allocator>::allocate
+    // - alloc::alloc::exchange_malloc              // sometimes missing
+    // - [allocation point in program being profiled]
+    //
+    // Mac, debug (Nov 2021)
+    // - [...backtrace library frames...]
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+    // - dhat::if_ignoring_allocs_else
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
+    // - __rg_alloc
+    // - alloc::alloc::alloc
+    // - alloc::alloc::Global::alloc_impl
+    // - <alloc::alloc::Global as core::alloc::Allocator>::allocate
+    // - alloc::alloc::exchange_malloc              // sometimes missing
+    // - [allocation point in program being profiled]
+    //
+    // Mac, release (Nov 2021)
+    // - [...backtrace library frames...]
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
+    // - dhat::if_ignoring_allocs_else
+    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
+    // - alloc::alloc::alloc                        // sometimes missing
+    // - [allocation point in program being profiled]
+    //
+    // Such frames are boring and clog up the output. So we scan backwards for
+    // the first frame that looks like it comes from allocator code. We keep
+    // that frame, but discard everything before it. If we don't find any such
+    // frames, we show from frame 0, i.e. all frames.
+    //
+    // Note: this is a little dangerous. When deciding if a new backtrace has
+    // been seen before, we consider all the IP addresses within it. And the
+    // now we trim some of those. It's possible that this will result in some
+    // previously distinct traces becoming the same, which makes dh_view.html
+    // abort. If that ever happens, look to see if something is going wrong
+    // here.
+    fn first_heap_symbol_to_show(&self) -> usize {
+        // Examples of symbols that this search will match:
+        // - alloc::alloc::{alloc,realloc,exchange_malloc}
+        // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
+        // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
+        // - __rg_{alloc,realloc}
+        self.first_symbol_to_show(|s|
+            s.starts_with("alloc::alloc::")
+            || s.starts_with("<alloc::alloc::")
+            || s.starts_with("<dhat::Alloc")
+            || s.starts_with("__rg_")
+        )
+    }
+
+    // Like `first_heap_symbol_to_show()`, but for ad hoc profiling. Some
+    // examples of top frame symbols in an ad hoc profiling backtrace:
+    //
+    // Linux, debug and release (Nov 2021)
+    // - dhat::ad_hoc_event::{{closure}}
+    // - dhat::if_ignoring_allocs_else
+    // - dhat::ad_hoc_event
+    // - [dhat::ad_hoc_event call site in program being profiled]
+    //
+    // Mac, debug and release (Nov 2021)
+    // - [...backtrace library frames...]
+    // - dhat::ad_hoc_event::{{closure}}
+    // - dhat::if_ignoring_allocs_else
+    // - dhat::ad_hoc_event
+    // - [dhat::ad_hoc_event call site in program being profiled]
+    fn first_ad_hoc_symbol_to_show(&self) -> usize {
+        self.first_symbol_to_show(|s| s == "dhat::ad_hoc_event")
+    }
+
+    // Find the first symbol to show, based on the predicate `p`.
+    fn first_symbol_to_show<P: Fn(&str) -> bool>(&self, p: P) -> usize {
+        // Get the symbols into a vector so we can reverse iterate over them.
+        let symbols: Vec<_> =
+            self.0.frames()
+                .iter()
+                .map(|f| f.symbols().iter())
+                .flatten()
+                .collect();
+
+        for (i, symbol) in symbols.iter().enumerate().rev() {
+            // Use `{:#}` to print the "alternate" form of the symbol name,
+            // which omits the trailing hash (e.g. `::ha68e4508a38cc95a`).
+            if let Some(s) = symbol.name().map(|name| format!("{:#}", name)) {
+                if p(&s) {
+                    return i;
+                }
+            }
+        }
+        0
+    }
+
+    // The bottom frame symbols in a backtrace (those below `main`) are typically
+    // the same, and look something like this:
+    // - main
+    // - core::ops::function::FnOnce::call_once (function.rs:227:5)
+    // - std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
+    // - std::rt::lang_start::{{closure}} (rt.rs:66:18)
+    // - core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once (function.rs:259:13)
+    // - std::panicking::try::do_call (panicking.rs:373:40)
+    // - std::panicking::try (panicking.rs:337:19)
+    // - std::panic::catch_unwind (panic.rs:379:14)
+    // - std::rt::lang_start_internal (rt.rs:51:25)
+    // - std::rt::lang_start (rt.rs:65:5)
+    // - _main (???:0:0)
+    //
+    // Such frames are boring and clog up the output. So we compare the bottom
+    // frames with those obtained when the `Globals` value was created. Those that
+    // overlap in the two cases are the common, uninteresting ones, and we discard
+    // them.
+    //
+    // Note: this is a little dangerous. See the comment on `first_symbol_to_show()`
+    // above for more detail.
+    fn last_frame_ip_to_show(&self, start_bt: &Backtrace) -> Option<*mut std::ffi::c_void> {
+        let self_frames = self.0.frames();
+        let start_frames = start_bt.0.frames();
+        let (mut i, mut j) = (self_frames.len() - 1, start_frames.len() - 1);
+        loop {
+            if self_frames[i].ip() != start_frames[j].ip() {
+                return Some(self_frames[i].ip());
+            }
+            if i == 0 || j == 0 {
+                return None;
+            }
+            i -= 1;
+            j -= 1;
+        }
+    }
+}
 
 impl PartialEq for Backtrace {
     fn eq(&self, other: &Self) -> bool {
@@ -1269,6 +1304,7 @@ impl Hash for Backtrace {
 
 /// Stats from heap profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HeapStats {
     /// Number of blocks (a.k.a. allocations) allocated over the entire run.
     pub total_blocks: u64,
@@ -1291,6 +1327,7 @@ pub struct HeapStats {
 
 /// Stats from ad hoc profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdHocStats {
     /// Number of events recorded for the entire run.
     pub total_events: u64,

@@ -147,7 +147,7 @@ fn main() {
     }
 
     // This stuff should be removed by backtrace trimming.
-    //assert!(n("backtrace::"));
+    assert!(n("backtrace::"));
     assert!(n("lang_start::"));
     assert!(n("call_once::"));
     assert!(n("catch_unwind::"));
