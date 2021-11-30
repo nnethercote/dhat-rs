@@ -858,6 +858,7 @@ impl<'m> Profiler<'m> {
 
 /// A builder for [`Profiler`], for cases more complex than the basic ones
 /// provided by the functions within [`Profiler`].
+#[derive(Debug)]
 pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
