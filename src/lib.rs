@@ -1187,12 +1187,12 @@ impl Backtrace {
         // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
         // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
         // - __rg_{alloc,realloc}
-        self.first_symbol_to_show(|s|
+        self.first_symbol_to_show(|s| {
             s.starts_with("alloc::alloc::")
-            || s.starts_with("<alloc::alloc::")
-            || s.starts_with("<dhat::Alloc")
-            || s.starts_with("__rg_")
-        )
+                || s.starts_with("<alloc::alloc::")
+                || s.starts_with("<dhat::Alloc")
+                || s.starts_with("__rg_")
+        })
     }
 
     // Like `first_heap_symbol_to_show()`, but for ad hoc profiling. Some
@@ -1217,12 +1217,13 @@ impl Backtrace {
     // Find the first symbol to show, based on the predicate `p`.
     fn first_symbol_to_show<P: Fn(&str) -> bool>(&self, p: P) -> usize {
         // Get the symbols into a vector so we can reverse iterate over them.
-        let symbols: Vec<_> =
-            self.0.frames()
-                .iter()
-                .map(|f| f.symbols().iter())
-                .flatten()
-                .collect();
+        let symbols: Vec<_> = self
+            .0
+            .frames()
+            .iter()
+            .map(|f| f.symbols().iter())
+            .flatten()
+            .collect();
 
         for (i, symbol) in symbols.iter().enumerate().rev() {
             // Use `{:#}` to print the "alternate" form of the symbol name,
