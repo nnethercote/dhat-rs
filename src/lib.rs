@@ -356,7 +356,7 @@ impl Globals {
             testing,
             filename,
             eprint_json,
-            start_bt: Backtrace(backtrace::Backtrace::new_unresolved()),
+            start_bt: Backtrace::new_unresolved(),
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
@@ -1014,7 +1014,7 @@ unsafe impl GlobalAlloc for Alloc {
 
                 if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                     let size = layout.size();
-                    let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+                    let bt = Backtrace::new_unresolved();
                     let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
                     let now = Instant::now();
@@ -1054,7 +1054,7 @@ unsafe impl GlobalAlloc for Alloc {
                     let (pp_info_idx, delta) = if let Some(live_block) = live_block {
                         (live_block.pp_info_idx, Some(delta))
                     } else {
-                        let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+                        let bt = Backtrace::new_unresolved();
                         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
                         (pp_info_idx, None)
                     };
@@ -1111,7 +1111,7 @@ pub fn ad_hoc_event(weight: usize) {
         || {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             if let Phase::During(g @ Globals { heap: None, .. }) = phase {
-                let bt = Backtrace(backtrace::Backtrace::new_unresolved());
+                let bt = Backtrace::new_unresolved();
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
                 // Update counts.
@@ -1149,6 +1149,10 @@ impl<'m> Drop for Profiler<'m> {
 struct Backtrace(backtrace::Backtrace);
 
 impl Backtrace {
+    fn new_unresolved() -> Self {
+        Backtrace(backtrace::Backtrace::new_unresolved())
+    }
+
     // The top frame symbols in a heap profiling backtrace vary significantly
     // (depending on build configuration, platform, and program point). Some
     // examples:
