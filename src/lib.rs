@@ -27,7 +27,7 @@
 //! - This crate works on any platform, while DHAT only works on some platforms
 //!   (Linux, mostly). (Note that DHAT's viewer is just HTML+JS+CSS and should
 //!   work in any modern web browser on any platform.)
-//! - This crate causes a smaller slowdown than DHAT.
+//! - This crate typically causes a smaller slowdown than DHAT.
 //! - This crate requires some modifications to a program's source code and
 //!   recompilation, while DHAT does not.
 //! - This crate cannot track memory accesses the way DHAT does, because it does
@@ -97,9 +97,10 @@
 //! # Running
 //!
 //! For both heap profiling and ad hoc profiling, the program will run more
-//! slowly than normal. (On Windows it may run much more slowly. This is
-//! because backtrace gathering can be drastically slower on Windows than on
-//! other platforms.)
+//! slowly than normal. The exact slowdown is hard to predict because it
+//! depends greatly on the program being profiled, but it can be large. (Even
+//! more so on Windows, because backtrace gathering can be drastically slower
+//! on Windows than on other platforms.)
 //!
 //! When the [`Profiler`] is dropped at the end of `main`, some basic
 //! information will be printed to `stderr`. For heap profiling it will look
@@ -203,6 +204,10 @@
 //!   within this crate, or a global allocation function like `__rg_alloc`.
 //! - Common frames at the bottom of backtraces, below `main`, are omitted.
 //!
+//! Backtrace trimming is inexact and if the above heuristics fail more frames
+//! will be shown. [`ProfilerBuilder::backtrace_len`] allows (approximate)
+//! control of how deep backtraces will be.
+//!
 //! # Heap usage testing
 //!
 //! `dhat` lets you write tests that checks that a certain piece of code does a
@@ -300,6 +305,10 @@ struct Globals {
     // Are we in testing mode?
     testing: bool,
 
+    // How many backtrace frames? This is adjusted from the user-specified
+    // amount in `ProfilerBuilder`.
+    backtrace_len: usize,
+
     // Print the JSON to stderr when saving it?
     eprint_json: bool,
 
@@ -351,12 +360,22 @@ struct HeapGlobals {
 }
 
 impl Globals {
-    fn new(testing: bool, filename: PathBuf, eprint_json: bool, heap: Option<HeapGlobals>) -> Self {
+    fn new(
+        testing: bool,
+        filename: PathBuf,
+        backtrace_len: usize,
+        eprint_json: bool,
+        heap: Option<HeapGlobals>,
+    ) -> Self {
+        // 10 is roughly enough to account for extra stuff at the start of the
+        // backtrace in the worst case.
+        let backtrace_len = backtrace_len.saturating_add(10);
         Self {
             testing,
             filename,
+            backtrace_len,
             eprint_json,
-            start_bt: Backtrace::new_unresolved(),
+            start_bt: Backtrace::new_unresolved(backtrace_len),
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
@@ -877,6 +896,7 @@ pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
     filename: Option<PathBuf>,
+    backtrace_len: usize,
     save_to_memory: Option<&'m mut String>,
     eprint_json: bool,
 }
@@ -888,6 +908,7 @@ impl<'m> ProfilerBuilder<'m> {
             ad_hoc: false,
             testing: false,
             filename: None,
+            backtrace_len: 20,
             save_to_memory: None,
             eprint_json: false,
         }
@@ -917,7 +938,7 @@ impl<'m> ProfilerBuilder<'m> {
         self
     }
 
-    /// Name of the file in which profiling data will be saved.
+    /// Sets the name of the file in which profiling data will be saved.
     ///
     /// # Examples
     /// ```
@@ -927,6 +948,28 @@ impl<'m> ProfilerBuilder<'m> {
     /// ```
     pub fn filename<P: AsRef<Path>>(mut self, filename: P) -> Self {
         self.filename = Some(filename.as_ref().to_path_buf());
+        self
+    }
+
+    /// Sets the length of backtraces to record. Longer backtraces can make
+    /// profiling much slower and increase the size of saved data files.
+    ///
+    /// The default value (used if this function is not called) is `20`. Use
+    /// `usize::MAX` for "unlimited". Values less than 4 will be clamped to 4.
+    ///
+    /// Internally, more frames are recorded than requested here, to allow for
+    /// frame trimming. Because trimming is an inexact process, it's possible
+    /// the number of frames shown won't exactly match the number requested
+    /// here. If anything, the number shown is likely to be slightly higher
+    /// than what is specified here.
+    ///
+    /// # Examples
+    /// ```
+    /// // Unlimited backtraces. This may increase profiling overhead greatly.
+    /// let _profiler = dhat::ProfilerBuilder::new().backtrace_len(usize::MAX).build();
+    /// ```
+    pub fn backtrace_len(mut self, backtrace_len: usize) -> Self {
+        self.backtrace_len = std::cmp::max(backtrace_len, 4);
         self
     }
 
@@ -972,6 +1015,7 @@ impl<'m> ProfilerBuilder<'m> {
                         *phase = Phase::During(Globals::new(
                             self.testing,
                             filename,
+                            self.backtrace_len,
                             self.eprint_json,
                             h,
                         ));
@@ -1015,7 +1059,7 @@ unsafe impl GlobalAlloc for Alloc {
 
                 if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                     let size = layout.size();
-                    let bt = Backtrace::new_unresolved();
+                    let bt = Backtrace::new_unresolved(g.backtrace_len);
                     let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
                     let now = Instant::now();
@@ -1055,7 +1099,7 @@ unsafe impl GlobalAlloc for Alloc {
                     let (pp_info_idx, delta) = if let Some(live_block) = live_block {
                         (live_block.pp_info_idx, Some(delta))
                     } else {
-                        let bt = Backtrace::new_unresolved();
+                        let bt = Backtrace::new_unresolved(g.backtrace_len);
                         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
                         (pp_info_idx, None)
                     };
@@ -1112,7 +1156,7 @@ pub fn ad_hoc_event(weight: usize) {
         || {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             if let Phase::During(g @ Globals { heap: None, .. }) = phase {
-                let bt = Backtrace::new_unresolved();
+                let bt = Backtrace::new_unresolved(g.backtrace_len);
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
                 // Update counts.
@@ -1150,8 +1194,14 @@ impl<'m> Drop for Profiler<'m> {
 struct Backtrace(backtrace::Backtrace);
 
 impl Backtrace {
-    fn new_unresolved() -> Self {
-        Backtrace(backtrace::Backtrace::new_unresolved())
+    // Get a stack trace of a particular maximum length.
+    fn new_unresolved(backtrace_len: usize) -> Self {
+        let mut frames = Vec::new();
+        backtrace::trace(|frame| {
+            frames.push(frame.clone().into());
+            frames.len() != backtrace_len // stop after this many frames
+        });
+        Backtrace(frames.into())
     }
 
     // The top frame symbols in a heap profiling backtrace vary significantly

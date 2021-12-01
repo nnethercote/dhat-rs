@@ -19,6 +19,7 @@ fn main() {
     {
         let _profiler = dhat::ProfilerBuilder::new()
             .ad_hoc()
+            .backtrace_len(usize::MAX)
             .save_to_memory(&mut mem)
             .eprint_json()
             .build();
@@ -135,15 +136,15 @@ fn main() {
         assert!(y("ad_hoc::f2 (ad-hoc.rs:6:0)"));
         //assert!(y("ad_hoc::f1 (ad-hoc.rs:10:0)"));
         assert!(y("ad_hoc::f1 (ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:32:0)"));
-        //assert!(y("ad_hoc::main (ad-hoc.rs:33:0)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:33:0)"));
+        //assert!(y("ad_hoc::main (ad-hoc.rs:34:0)"));
     } else {
         assert!(y("ad_hoc::f2 (ad-hoc.rs:5:5)"));
         assert!(y("ad_hoc::f2 (ad-hoc.rs:6:5)"));
         assert!(y("ad_hoc::f1 (ad-hoc.rs:10:5)"));
         assert!(y("ad_hoc::f1 (ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (ad-hoc.rs:32:9)"));
         assert!(y("ad_hoc::main (ad-hoc.rs:33:9)"));
+        assert!(y("ad_hoc::main (ad-hoc.rs:34:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
