@@ -923,6 +923,7 @@ impl<'m> ProfilerBuilder<'m> {
     /// ```
     /// let filename = format!("heap-{}.json", std::process::id());
     /// let _profiler = dhat::ProfilerBuilder::new().filename(filename).build();
+    /// # std::mem::forget(_profiler); // Don't write the file in `cargo tests`
     /// ```
     pub fn filename<P: AsRef<Path>>(mut self, filename: P) -> Self {
         self.filename = Some(filename.as_ref().to_path_buf());
