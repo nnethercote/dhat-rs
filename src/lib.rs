@@ -633,19 +633,23 @@ impl Globals {
             );
         }
 
-        // `to_{string,writer}` produces JSON that is compact, and
-        // `to_{string,writer}_pretty` produces JSON that is readable.
-        // Ideally we'd have something between the two (e.g. 1-space
-        // indents instead of 2-space, no spaces after `:`, `fs` arrays on
-        // a single line) more like what DHAT produces. But in the absence
-        // of such an intermediate option, readability trumps compactness.
         if let Some(mem) = save_to_memory {
+            // Default pretty printing is fine here, it's only used for small
+            // tests.
             **mem = serde_json::to_string_pretty(&json).unwrap();
             eprintln!("dhat: The data has been saved to the memory buffer");
         } else {
             let write = || -> std::io::Result<()> {
                 let file = File::create(&self.filename)?;
-                serde_json::to_writer_pretty(&file, &json)?;
+                // `to_writer` produces JSON that is compact,
+                // `to_writer_pretty` produces JSON that is readable, and this
+                // code gives us JSON that is both. Ideally it would be even
+                // more compact, more like what DHAT produces, e.g. no spaces
+                // after `:`, and `fs` arrays on a single line, but this is as
+                // good as we can easily achieve.
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+                let mut ser = serde_json::Serializer::with_formatter(&file, formatter);
+                json.serialize(&mut ser)?;
                 Ok(())
             };
             match write() {
