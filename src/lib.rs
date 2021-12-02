@@ -803,34 +803,34 @@ struct LiveBlock {
 // would be intercepted and trigger additional allocations, and so on, leading
 // to infinite loops.
 //
-// This function runs `f1` if we are currently ignoring allocations. Otherwise,
-// it runs `f2` while ignoring allocations. In practice, `f1` is always a
-// closure containing `unreachable!()` except within the `GlobalAlloc` methods.
+// With this type we can run one code path if we are already ignoring
+// allocations. Otherwise, we can a second code path while ignoring
+// allocations. In practice, the first code path is unreachable except within
+// the `GlobalAlloc` methods.
 //
-// WARNING: This function must be used for any code within this crate that can
+// WARNING: This type must be used for any code within this crate that can
 // trigger allocations.
-fn if_ignoring_allocs_else<F1, F2, R>(f1: F1, f2: F2) -> R
-where
-    F1: FnOnce() -> R,
-    F2: FnOnce() -> R,
-{
-    thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
+struct IgnoreAllocs {
+    was_already_ignoring_allocs: bool,
+}
 
-    /// If `F` panics, then `ResetOnDrop` will still reset `IGNORE_ALLOCS`
-    /// so that it can be used again.
-    struct ResetOnDrop;
+thread_local!(static IGNORE_ALLOCS: Cell<bool> = Cell::new(false));
 
-    impl Drop for ResetOnDrop {
-        fn drop(&mut self) {
-            IGNORE_ALLOCS.with(|b| b.set(false));
+impl IgnoreAllocs {
+    fn new() -> Self {
+        Self {
+            was_already_ignoring_allocs: IGNORE_ALLOCS.with(|b| b.replace(true)),
         }
     }
+}
 
-    if IGNORE_ALLOCS.with(|b| b.replace(true)) {
-        f1()
-    } else {
-        let _reset_on_drop = ResetOnDrop;
-        f2()
+/// If code panics while `IgnoreAllocs` is live, this will still reset
+/// `IGNORE_ALLOCS` so that it can be used again.
+impl Drop for IgnoreAllocs {
+    fn drop(&mut self) {
+        if !self.was_already_ignoring_allocs {
+            IGNORE_ALLOCS.with(|b| b.set(false));
+        }
     }
 }
 
@@ -994,41 +994,39 @@ impl<'m> ProfilerBuilder<'m> {
     ///
     /// Panics if a [`Profiler`] has been created previously.
     pub fn build(self) -> Profiler<'m> {
-        if_ignoring_allocs_else(
-            || unreachable!(),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                match phase {
-                    Phase::Pre => {
-                        let filename = if let Some(filename) = self.filename {
-                            filename
-                        } else if !self.ad_hoc {
-                            PathBuf::from("dhat-heap.json")
-                        } else {
-                            PathBuf::from("dhat-ad-hoc.json")
-                        };
-                        let h = if !self.ad_hoc {
-                            Some(HeapGlobals::new())
-                        } else {
-                            None
-                        };
-                        *phase = Phase::During(Globals::new(
-                            self.testing,
-                            filename,
-                            self.backtrace_len,
-                            self.eprint_json,
-                            h,
-                        ));
-                    }
-                    Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
-                        panic!("dhat: profiling started a second time")
-                    }
-                }
-                Profiler {
-                    save_to_memory: self.save_to_memory,
-                }
-            },
-        )
+        let ignore_allocs = IgnoreAllocs::new();
+        std::assert!(!ignore_allocs.was_already_ignoring_allocs);
+
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        match phase {
+            Phase::Pre => {
+                let filename = if let Some(filename) = self.filename {
+                    filename
+                } else if !self.ad_hoc {
+                    PathBuf::from("dhat-heap.json")
+                } else {
+                    PathBuf::from("dhat-ad-hoc.json")
+                };
+                let h = if !self.ad_hoc {
+                    Some(HeapGlobals::new())
+                } else {
+                    None
+                };
+                *phase = Phase::During(Globals::new(
+                    self.testing,
+                    filename,
+                    self.backtrace_len,
+                    self.eprint_json,
+                    h,
+                ));
+            }
+            Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
+                panic!("dhat: profiling started a second time")
+            }
+        }
+        Profiler {
+            save_to_memory: self.save_to_memory,
+        }
     }
 }
 
@@ -1048,100 +1046,100 @@ pub struct Alloc;
 
 unsafe impl GlobalAlloc for Alloc {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
-        if_ignoring_allocs_else(
-            || System.alloc(layout),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                let ptr = System.alloc(layout);
-                if ptr.is_null() {
-                    return ptr;
-                }
+        let ignore_allocs = IgnoreAllocs::new();
+        if ignore_allocs.was_already_ignoring_allocs {
+            System.alloc(layout)
+        } else {
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            let ptr = System.alloc(layout);
+            if ptr.is_null() {
+                return ptr;
+            }
 
-                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
-                    let size = layout.size();
-                    let bt = Backtrace::new_unresolved(g.backtrace_len);
-                    let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
+            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+                let size = layout.size();
+                let bt = Backtrace::new_unresolved(g.backtrace_len);
+                let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
-                    let now = Instant::now();
-                    g.record_block(ptr, pp_info_idx, now);
-                    g.update_counts_for_alloc(pp_info_idx, size, None, now);
-                }
-                ptr
-            },
-        )
+                let now = Instant::now();
+                g.record_block(ptr, pp_info_idx, now);
+                g.update_counts_for_alloc(pp_info_idx, size, None, now);
+            }
+            ptr
+        }
     }
 
     unsafe fn realloc(&self, old_ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
-        if_ignoring_allocs_else(
-            || System.realloc(old_ptr, layout, new_size),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                let new_ptr = System.realloc(old_ptr, layout, new_size);
-                if new_ptr.is_null() {
-                    return new_ptr;
+        let ignore_allocs = IgnoreAllocs::new();
+        if ignore_allocs.was_already_ignoring_allocs {
+            System.realloc(old_ptr, layout, new_size)
+        } else {
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            let new_ptr = System.realloc(old_ptr, layout, new_size);
+            if new_ptr.is_null() {
+                return new_ptr;
+            }
+
+            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+                let old_size = layout.size();
+                let delta = Delta::new(old_size, new_size);
+
+                if delta.shrinking {
+                    // Total bytes is coming down from a possible peak.
+                    g.check_for_global_peak();
                 }
 
-                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
-                    let old_size = layout.size();
-                    let delta = Delta::new(old_size, new_size);
+                // Remove the record of the existing live block and get the
+                // `PpInfo`. If it's not in the live block table, it must
+                // have been allocated before `TRI_GLOBALS` was set up, and
+                // we treat it like an `alloc`.
+                let h = g.heap.as_mut().unwrap();
+                let live_block = h.live_blocks.remove(&(old_ptr as usize));
+                let (pp_info_idx, delta) = if let Some(live_block) = live_block {
+                    (live_block.pp_info_idx, Some(delta))
+                } else {
+                    let bt = Backtrace::new_unresolved(g.backtrace_len);
+                    let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
+                    (pp_info_idx, None)
+                };
 
-                    if delta.shrinking {
-                        // Total bytes is coming down from a possible peak.
-                        g.check_for_global_peak();
-                    }
-
-                    // Remove the record of the existing live block and get the
-                    // `PpInfo`. If it's not in the live block table, it must
-                    // have been allocated before `TRI_GLOBALS` was set up, and
-                    // we treat it like an `alloc`.
-                    let h = g.heap.as_mut().unwrap();
-                    let live_block = h.live_blocks.remove(&(old_ptr as usize));
-                    let (pp_info_idx, delta) = if let Some(live_block) = live_block {
-                        (live_block.pp_info_idx, Some(delta))
-                    } else {
-                        let bt = Backtrace::new_unresolved(g.backtrace_len);
-                        let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
-                        (pp_info_idx, None)
-                    };
-
-                    let now = Instant::now();
-                    g.record_block(new_ptr, pp_info_idx, now);
-                    g.update_counts_for_alloc(pp_info_idx, new_size, delta, now);
-                }
-                new_ptr
-            },
-        )
+                let now = Instant::now();
+                g.record_block(new_ptr, pp_info_idx, now);
+                g.update_counts_for_alloc(pp_info_idx, new_size, delta, now);
+            }
+            new_ptr
+        }
     }
 
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
-        if_ignoring_allocs_else(
-            || System.dealloc(ptr, layout),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                System.dealloc(ptr, layout);
+        let ignore_allocs = IgnoreAllocs::new();
+        if ignore_allocs.was_already_ignoring_allocs {
+            System.dealloc(ptr, layout)
+        } else {
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            System.dealloc(ptr, layout);
 
-                if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
-                    let size = layout.size();
+            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+                let size = layout.size();
 
-                    // Remove the record of the live block and get the
-                    // `PpInfo`. If it's not in the live block table, it must
-                    // have been allocated before `TRI_GLOBALS` was set up, and
-                    // we just ignore it.
-                    let h = g.heap.as_mut().unwrap();
-                    if let Some(LiveBlock {
-                        pp_info_idx,
-                        allocation_instant,
-                    }) = h.live_blocks.remove(&(ptr as usize))
-                    {
-                        // Total bytes is coming down from a possible peak.
-                        g.check_for_global_peak();
+                // Remove the record of the live block and get the
+                // `PpInfo`. If it's not in the live block table, it must
+                // have been allocated before `TRI_GLOBALS` was set up, and
+                // we just ignore it.
+                let h = g.heap.as_mut().unwrap();
+                if let Some(LiveBlock {
+                    pp_info_idx,
+                    allocation_instant,
+                }) = h.live_blocks.remove(&(ptr as usize))
+                {
+                    // Total bytes is coming down from a possible peak.
+                    g.check_for_global_peak();
 
-                        let alloc_duration = allocation_instant.elapsed();
-                        g.update_counts_for_dealloc(pp_info_idx, size, alloc_duration);
-                    }
+                    let alloc_duration = allocation_instant.elapsed();
+                    g.update_counts_for_dealloc(pp_info_idx, size, alloc_duration);
                 }
-            },
-        );
+            }
+        }
     }
 }
 
@@ -1151,39 +1149,35 @@ unsafe impl GlobalAlloc for Alloc {
 /// this function has no effect if a [`Profiler`] is not running or not doing ad
 /// hoc profiling.
 pub fn ad_hoc_event(weight: usize) {
-    if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-            if let Phase::During(g @ Globals { heap: None, .. }) = phase {
-                let bt = Backtrace::new_unresolved(g.backtrace_len);
-                let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
+    let ignore_allocs = IgnoreAllocs::new();
+    std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-                // Update counts.
-                g.update_counts_for_ad_hoc_event(pp_info_idx, weight);
-            }
-        },
-    );
+    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+    if let Phase::During(g @ Globals { heap: None, .. }) = phase {
+        let bt = Backtrace::new_unresolved(g.backtrace_len);
+        let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
+
+        // Update counts.
+        g.update_counts_for_ad_hoc_event(pp_info_idx, weight);
+    }
 }
 
 impl<'m> Drop for Profiler<'m> {
     fn drop(&mut self) {
-        if_ignoring_allocs_else(
-            || unreachable!(),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                match std::mem::replace(phase, Phase::PostDrop) {
-                    Phase::Pre => unreachable!(),
-                    Phase::During(g) => {
-                        if !g.testing {
-                            g.finish(&mut self.save_to_memory)
-                        }
-                    }
-                    Phase::PostAssert => {}
-                    Phase::PostDrop => unreachable!(),
+        let ignore_allocs = IgnoreAllocs::new();
+        std::assert!(!ignore_allocs.was_already_ignoring_allocs);
+
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        match std::mem::replace(phase, Phase::PostDrop) {
+            Phase::Pre => unreachable!(),
+            Phase::During(g) => {
+                if !g.testing {
+                    g.finish(&mut self.save_to_memory)
                 }
-            },
-        );
+            }
+            Phase::PostAssert => {}
+            Phase::PostDrop => unreachable!(),
+        }
     }
 }
 
@@ -1209,8 +1203,6 @@ impl Backtrace {
     // examples:
     //
     // Linux, debug and release (Nov 2021)
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-    // - dhat::if_ignoring_allocs_else
     // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
     // - __rg_alloc
     // - alloc::alloc::alloc
@@ -1221,8 +1213,6 @@ impl Backtrace {
     //
     // Mac, debug (Nov 2021)
     // - [...backtrace library frames...]
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-    // - dhat::if_ignoring_allocs_else
     // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
     // - __rg_alloc
     // - alloc::alloc::alloc
@@ -1233,8 +1223,6 @@ impl Backtrace {
     //
     // Mac, release (Nov 2021)
     // - [...backtrace library frames...]
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc::{{closure}}
-    // - dhat::if_ignoring_allocs_else
     // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
     // - alloc::alloc::alloc                        // sometimes missing
     // - [allocation point in program being profiled]
@@ -1268,15 +1256,11 @@ impl Backtrace {
     // examples of top frame symbols in an ad hoc profiling backtrace:
     //
     // Linux, debug and release (Nov 2021)
-    // - dhat::ad_hoc_event::{{closure}}
-    // - dhat::if_ignoring_allocs_else
     // - dhat::ad_hoc_event
     // - [dhat::ad_hoc_event call site in program being profiled]
     //
     // Mac, debug and release (Nov 2021)
     // - [...backtrace library frames...]
-    // - dhat::ad_hoc_event::{{closure}}
-    // - dhat::if_ignoring_allocs_else
     // - dhat::ad_hoc_event
     // - [dhat::ad_hoc_event call site in program being profiled]
     fn first_ad_hoc_symbol_to_show(&self) -> usize {
@@ -1412,21 +1396,19 @@ impl HeapStats {
     /// Panics if called when a [`Profiler`] is not running or not doing heap
     /// profiling.
     pub fn get() -> Self {
-        if_ignoring_allocs_else(
-            || unreachable!(),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                match phase {
-                    Phase::Pre => {
-                        panic!("dhat: getting heap stats before the profiler has started")
-                    }
-                    Phase::During(g) => g.get_heap_stats(),
-                    Phase::PostAssert | Phase::PostDrop => {
-                        panic!("dhat: getting heap stats after the profiler has stopped")
-                    }
-                }
-            },
-        )
+        let ignore_allocs = IgnoreAllocs::new();
+        std::assert!(!ignore_allocs.was_already_ignoring_allocs);
+
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        match phase {
+            Phase::Pre => {
+                panic!("dhat: getting heap stats before the profiler has started")
+            }
+            Phase::During(g) => g.get_heap_stats(),
+            Phase::PostAssert | Phase::PostDrop => {
+                panic!("dhat: getting heap stats after the profiler has stopped")
+            }
+        }
     }
 }
 
@@ -1438,21 +1420,19 @@ impl AdHocStats {
     /// Panics if called when a [`Profiler`] is not running or not doing ad hoc
     /// profiling.
     pub fn get() -> Self {
-        if_ignoring_allocs_else(
-            || unreachable!(),
-            || {
-                let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-                match phase {
-                    Phase::Pre => {
-                        panic!("dhat: getting ad hoc stats before the profiler has started")
-                    }
-                    Phase::During(g) => g.get_ad_hoc_stats(),
-                    Phase::PostAssert | Phase::PostDrop => {
-                        panic!("dhat: getting ad hoc stats after the profiler has stopped")
-                    }
-                }
-            },
-        )
+        let ignore_allocs = IgnoreAllocs::new();
+        std::assert!(!ignore_allocs.was_already_ignoring_allocs);
+
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        match phase {
+            Phase::Pre => {
+                panic!("dhat: getting ad hoc stats before the profiler has started")
+            }
+            Phase::During(g) => g.get_ad_hoc_stats(),
+            Phase::PostAssert | Phase::PostDrop => {
+                panic!("dhat: getting ad hoc stats after the profiler has stopped")
+            }
+        }
     }
 }
 
@@ -1465,35 +1445,34 @@ where
     // We do the test within `check_assert_condition` (as opposed to within the
     // `assert*` macros) so that we'll always detect if the profiler isn't
     // running.
-    if_ignoring_allocs_else(
-        || unreachable!(),
-        || {
-            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-            match phase {
-                Phase::Pre => panic!("dhat: asserting before the profiler has started"),
-                Phase::During(g) => {
-                    if !g.testing {
-                        panic!("dhat: asserting while not in testing mode");
-                    }
-                    if cond() {
-                        return false;
-                    }
-                }
-                Phase::PostAssert => panic!("dhat: asserting after the profiler has asserted"),
-                Phase::PostDrop => panic!("dhat: asserting after the profiler has stopped"),
+    let ignore_allocs = IgnoreAllocs::new();
+    std::assert!(!ignore_allocs.was_already_ignoring_allocs);
+
+    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+    match phase {
+        Phase::Pre => panic!("dhat: asserting before the profiler has started"),
+        Phase::During(g) => {
+            if !g.testing {
+                panic!("dhat: asserting while not in testing mode");
             }
-            // Failure.
-            match std::mem::replace(phase, Phase::PostAssert) {
-                Phase::Pre => unreachable!(),
-                Phase::During(g) => {
-                    g.finish(&mut None);
-                    true
-                }
-                Phase::PostAssert => unreachable!(),
-                Phase::PostDrop => unreachable!(),
+            if cond() {
+                return false;
             }
-        },
-    )
+        }
+        Phase::PostAssert => panic!("dhat: asserting after the profiler has asserted"),
+        Phase::PostDrop => panic!("dhat: asserting after the profiler has stopped"),
+    }
+
+    // Failure.
+    match std::mem::replace(phase, Phase::PostAssert) {
+        Phase::Pre => unreachable!(),
+        Phase::During(g) => {
+            g.finish(&mut None);
+            true
+        }
+        Phase::PostAssert => unreachable!(),
+        Phase::PostDrop => unreachable!(),
+    }
 }
 
 /// Asserts that an expression is true.
