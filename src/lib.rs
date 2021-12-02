@@ -205,8 +205,8 @@
 //! - Common frames at the bottom of backtraces, below `main`, are omitted.
 //!
 //! Backtrace trimming is inexact and if the above heuristics fail more frames
-//! will be shown. [`ProfilerBuilder::backtrace_len`] allows (approximate)
-//! control of how deep backtraces will be.
+//! will be shown. [`ProfilerBuilder::trim`] allows (approximate) control of
+//! how deep backtraces will be.
 //!
 //! # Heap usage testing
 //!
@@ -296,6 +296,13 @@ enum Phase<T> {
     PostDrop,
 }
 
+// Type used in frame trimming.
+#[derive(PartialEq)]
+enum TB {
+    Top,
+    Bottom,
+}
+
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
@@ -305,15 +312,24 @@ struct Globals {
     // Are we in testing mode?
     testing: bool,
 
-    // How many backtrace frames? This is adjusted from the user-specified
-    // amount in `ProfilerBuilder`.
-    backtrace_len: usize,
+    // How should we trim backtraces?
+    trim: Option<usize>,
 
     // Print the JSON to stderr when saving it?
     eprint_json: bool,
 
     // The backtrace at startup. Used for backtrace trimmming.
     start_bt: Backtrace,
+
+    // Frames to trim at the top and bottom of backtraces. Computed once the
+    // first backtrace is obtained during profiling; that backtrace is then
+    // compared to `start_bt`.
+    //
+    // Each element is the address of a frame, and thus actually a `*mut
+    // c_void`, but we store it as a `usize` because (a) we never dereference
+    // it, and (b) using `*mut c_void` leads to compile errors because raw
+    // pointers don't implement `Send`.
+    frames_to_trim: Option<FxHashMap<usize, TB>>,
 
     // When `Globals` is created, which is when the `Profiler` is created.
     start_instant: Instant,
@@ -340,11 +356,13 @@ struct Globals {
 }
 
 struct HeapGlobals {
-    // Each live block is associated with a `PpInfo`. Each key is the address
-    // of a live block, and thus actually a `*mut u8`, but we store it as a
-    // `usize` because we never dereference it, and using `*mut u8` leads to
-    // compile errors because raw pointers don't implement `Send`. An element
-    // is deleted when the corresponding allocation is freed.
+    // Each live block is associated with a `PpInfo`. An element is deleted
+    // when the corresponding allocation is freed.
+    //
+    // Each key is the address of a live block, and thus actually a `*mut u8`,
+    // but we store it as a `usize` because (a) we never dereference it, and
+    // (b) using `*mut u8` leads to compile errors because raw pointers don't
+    // implement `Send`.
     live_blocks: FxHashMap<usize, LiveBlock>,
 
     // Current counts.
@@ -363,19 +381,19 @@ impl Globals {
     fn new(
         testing: bool,
         filename: PathBuf,
-        backtrace_len: usize,
+        trim: Option<usize>,
         eprint_json: bool,
         heap: Option<HeapGlobals>,
     ) -> Self {
-        // 10 is roughly enough to account for extra stuff at the start of the
-        // backtrace in the worst case.
-        let backtrace_len = backtrace_len.saturating_add(10);
         Self {
             testing,
             filename,
-            backtrace_len,
+            trim,
             eprint_json,
-            start_bt: Backtrace::new_unresolved(backtrace_len),
+            // `None` here because we don't want any frame trimming for this
+            // backtrace.
+            start_bt: new_backtrace_inner(None, &FxHashMap::default()),
+            frames_to_trim: None,
             start_instant: Instant::now(),
             pp_infos: Vec::default(),
             backtraces: FxHashMap::default(),
@@ -545,12 +563,15 @@ impl Globals {
                 bt.0.resolve();
 
                 // Trim boring frames at the top and bottom of the backtrace.
-                let first_symbol_to_show = if self.heap.is_some() {
-                    bt.first_heap_symbol_to_show()
+                let first_symbol_to_show = if self.trim.is_some() {
+                    if self.heap.is_some() {
+                        bt.first_heap_symbol_to_show()
+                    } else {
+                        bt.first_ad_hoc_symbol_to_show()
+                    }
                 } else {
-                    bt.first_ad_hoc_symbol_to_show()
+                    0
                 };
-                let last_frame_ip_to_show = bt.last_frame_ip_to_show(&self.start_bt);
 
                 // Determine the frame indices for this backtrace. This
                 // involves getting the string for each frame and adding a
@@ -558,41 +579,18 @@ impl Globals {
                 // before.
                 let mut fs = vec![];
                 let mut i = 0;
-                'outer: for frame in bt.0.frames().iter() {
+                for frame in bt.0.frames().iter() {
                     for symbol in frame.symbols().iter() {
                         i += 1;
                         if (i - 1) < first_symbol_to_show {
                             continue;
                         }
-                        let s = format!(
-                            // Use `{:#}` to print the "alternate" form of the
-                            // symbol name, which omits the trailing hash (e.g.
-                            // `::ha68e4508a38cc95a`).
-                            "{:?}: {:#} ({:#}:{}:{})",
-                            frame.ip(),
-                            symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-                            // We have the full path, but that's typically
-                            // very long and clogs up the output greatly.
-                            // So just use the filename, which is usually
-                            // good enough.
-                            symbol
-                                .filename()
-                                .and_then(|path| path.file_name())
-                                .and_then(|file_name| file_name.to_str())
-                                .unwrap_or("???"),
-                            symbol.lineno().unwrap_or(0),
-                            symbol.colno().unwrap_or(0),
-                        );
-
+                        let s = Backtrace::frame_to_string(frame, symbol);
                         let &mut ftbl_idx = ftbl_indices.entry(s).or_insert_with(|| {
                             next_ftbl_idx += 1;
                             next_ftbl_idx - 1
                         });
                         fs.push(ftbl_idx);
-                    }
-
-                    if Some(frame.ip()) == last_frame_ip_to_show {
-                        break 'outer;
                     }
                 }
 
@@ -896,7 +894,7 @@ pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
     filename: Option<PathBuf>,
-    backtrace_len: usize,
+    trim: Option<usize>,
     save_to_memory: Option<&'m mut String>,
     eprint_json: bool,
 }
@@ -908,7 +906,7 @@ impl<'m> ProfilerBuilder<'m> {
             ad_hoc: false,
             testing: false,
             filename: None,
-            backtrace_len: 20,
+            trim: Some(10),
             save_to_memory: None,
             eprint_json: false,
         }
@@ -951,25 +949,39 @@ impl<'m> ProfilerBuilder<'m> {
         self
     }
 
-    /// Sets the length of backtraces to record. Longer backtraces can make
-    /// profiling much slower and increase the size of saved data files.
+    /// Requests backtrace trimming of a particular kind.
     ///
-    /// The default value (used if this function is not called) is `20`. Use
-    /// `usize::MAX` for "unlimited". Values less than 4 will be clamped to 4.
+    /// `dhat` can trim uninteresting frames from the top and bottom of
+    /// backtraces, which makes the output easier to read. It can also limit
+    /// the number of frames, which improves performance.
     ///
-    /// Internally, more frames are recorded than requested here, to allow for
-    /// frame trimming. Because trimming is an inexact process, it's possible
-    /// the number of frames shown won't exactly match the number requested
-    /// here. If anything, the number shown is likely to be slightly higher
-    /// than what is specified here.
+    /// The argument can be specified in several ways.
+    /// - `None`: no backtrace trimming will be performed, and there is no
+    ///   frame count limit. This makes profiling much slower and increases the
+    ///   size of saved data files.
+    /// - `Some(n)`: top and bottom trimming will be performed, and the number
+    ///   of frames will be limited by `n`. Values of `n` less than 4 will be
+    ///   clamped to 4.
+    /// - `Some(usize::MAX)`: top and bottom trimming with be performed, but
+    ///   there is no frame count limit. This makes profiling much slower and
+    ///   increases the size of saved data files.
+    ///
+    /// The default value (used if this function is not called) is `Some(10)`.
+    ///
+    /// The number of frames shown in viewed profiles may differ from the
+    /// number requested here, for two reasons.
+    /// - Inline frames do not count towards this length. In release builds it
+    ///   is common for the number of inline frames to equal or even exceed the
+    ///   number of "real" frames.
+    /// - Backtrace trimming will remove a small number of frames from heap
+    ///   profile backtraces.
     ///
     /// # Examples
     /// ```
-    /// // Unlimited backtraces. This may increase profiling overhead greatly.
-    /// let _profiler = dhat::ProfilerBuilder::new().backtrace_len(usize::MAX).build();
+    /// let _profiler = dhat::ProfilerBuilder::new().trim(None).build();
     /// ```
-    pub fn backtrace_len(mut self, backtrace_len: usize) -> Self {
-        self.backtrace_len = std::cmp::max(backtrace_len, 4);
+    pub fn trim(mut self, max_frames: Option<usize>) -> Self {
+        self.trim = max_frames.map(|m| std::cmp::max(m, 4));
         self
     }
 
@@ -1015,7 +1027,7 @@ impl<'m> ProfilerBuilder<'m> {
                 *phase = Phase::During(Globals::new(
                     self.testing,
                     filename,
-                    self.backtrace_len,
+                    self.trim,
                     self.eprint_json,
                     h,
                 ));
@@ -1034,6 +1046,67 @@ impl Default for ProfilerBuilder<'_> {
     fn default() -> Self {
         ProfilerBuilder::new()
     }
+}
+
+// Get a backtrace according to `$g`'s settings. A macro rather than a `Global`
+// method to avoid putting an extra frame into backtraces.
+macro_rules! new_backtrace {
+    ($g:expr) => {{
+        if $g.frames_to_trim.is_none() {
+            // This is the first backtrace from profiling. Work out what we
+            // will be trimming from the top and bottom of all backtraces.
+            // `None` here because we don't want any frame trimming for this
+            // backtrace.
+            let bt = new_backtrace_inner(None, &FxHashMap::default());
+            $g.frames_to_trim = Some(bt.get_frames_to_trim(&$g.start_bt));
+        }
+
+        // Get the backtrace.
+        new_backtrace_inner(
+            $g.trim,
+            $g.frames_to_trim.as_ref().unwrap(),
+        )
+    }};
+}
+
+// Get a backtrace, possibly trimmed.
+//
+// Note: it's crucial that there only be a single call to `backtrace::trace()`
+// that is used everywhere, so that all traces will have the same backtrace
+// function IPs in their top frames. (With multiple call sites we would have
+// multiple closures, giving multiple instances of `backtrace::trace<F>`, and
+// monomorphisation would put them into different functions in the binary.)
+// Without this, top frame trimming wouldn't work. That's why this is a
+// function (with `inline(never)` just to be safe) rather than a macro like
+// `new_backtrace`. The frame for this function will be removed by top frame
+// trimming.
+#[inline(never)]
+fn new_backtrace_inner(
+    trim: Option<usize>,
+    frames_to_trim: &FxHashMap<usize, TB>,
+) -> Backtrace {
+    // Get the backtrace, trimming if necessary at the top and bottom and for
+    // length.
+    let mut frames = Vec::new();
+    backtrace::trace(|frame| {
+        let ip = frame.ip() as usize;
+        if trim.is_some() {
+            match frames_to_trim.get(&ip) {
+                Some(TB::Top) => return true, // ignore frame and continue
+                Some(TB::Bottom) => return false, // ignore frame and stop
+                _ => {} // use this frame
+            }
+        }
+
+        frames.push(frame.clone().into());
+
+        if let Some(max_frames) = trim {
+            frames.len() < max_frames // stop if we have enough frames
+        } else {
+            true // continue
+        }
+    });
+    Backtrace(frames.into())
 }
 
 /// A global allocator that tracks allocations and deallocations on behalf of
@@ -1058,7 +1131,7 @@ unsafe impl GlobalAlloc for Alloc {
 
             if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
                 let size = layout.size();
-                let bt = Backtrace::new_unresolved(g.backtrace_len);
+                let bt = new_backtrace!(g);
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
 
                 let now = Instant::now();
@@ -1098,7 +1171,7 @@ unsafe impl GlobalAlloc for Alloc {
                 let (pp_info_idx, delta) = if let Some(live_block) = live_block {
                     (live_block.pp_info_idx, Some(delta))
                 } else {
-                    let bt = Backtrace::new_unresolved(g.backtrace_len);
+                    let bt = new_backtrace!(g);
                     let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
                     (pp_info_idx, None)
                 };
@@ -1154,7 +1227,7 @@ pub fn ad_hoc_event(weight: usize) {
 
     let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
     if let Phase::During(g @ Globals { heap: None, .. }) = phase {
-        let bt = Backtrace::new_unresolved(g.backtrace_len);
+        let bt = new_backtrace!(g);
         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
         // Update counts.
@@ -1188,53 +1261,101 @@ impl<'m> Drop for Profiler<'m> {
 struct Backtrace(backtrace::Backtrace);
 
 impl Backtrace {
-    // Get a stack trace of a particular maximum length.
-    fn new_unresolved(backtrace_len: usize) -> Self {
-        let mut frames = Vec::new();
-        backtrace::trace(|frame| {
-            frames.push(frame.clone().into());
-            frames.len() != backtrace_len // stop after this many frames
-        });
-        Backtrace(frames.into())
+    // The top frame symbols in a backtrace (those relating to backtracing
+    // itself) are typically the same, and look something like this (Mac or
+    // Linux release build, Dec 2021):
+    // - 0x10fca200a: backtrace::backtrace::libunwind::trace
+    // - 0x10fca200a: backtrace::backtrace::trace_unsynchronized
+    // - 0x10fca200a: backtrace::backtrace::trace
+    // - 0x10fc97350: dhat::new_backtrace_inner
+    // - 0x10fc97984: [interesting function]
+    //
+    // We compare the top frames of a stack obtained while profiling with those
+    // in `start_bt`. Those that overlap are the frames relating to backtracing
+    // that can be discarded.
+    //
+    // The bottom frame symbols in a backtrace (those below `main`) are
+    // typically the same, and look something like this (Mac or Linux release
+    // build, Dec 2021):
+    // - 0x1060f70e8: dhatter::main
+    // - 0x1060f7026: core::ops::function::FnOnce::call_once
+    // - 0x1060f7026: std::sys_common::backtrace::__rust_begin_short_backtrace
+    // - 0x1060f703c: std::rt::lang_start::{{closure}}
+    // - 0x10614b79a: core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once
+    // - 0x10614b79a: std::panicking::try::do_call
+    // - 0x10614b79a: std::panicking::try
+    // - 0x10614b79a: std::panic::catch_unwind
+    // - 0x10614b79a: std::rt::lang_start_internal::{{closure}}
+    // - 0x10614b79a: std::panicking::try::do_call
+    // - 0x10614b79a: std::panicking::try
+    // - 0x10614b79a: std::panic::catch_unwind
+    // - 0x10614b79a: std::rt::lang_start_internal
+    // - 0x1060f7259: ???
+    //
+    // We compare the bottom frames of a stack obtained while profiling with
+    // those in `start_bt`. Those that overlap are the frames below main that
+    // can be discarded.
+    fn get_frames_to_trim(&self, start_bt: &Backtrace) -> FxHashMap<usize, TB> {
+        let mut frames_to_trim = FxHashMap::default();
+        let frames1 = self.0.frames();
+        let frames2 = start_bt.0.frames();
+
+        let (mut i1, mut i2) = (0, 0);
+        loop {
+            if i1 == frames1.len() - 1 || i2 == frames2.len() - 1 {
+                // This should never happen in practice, it's too much
+                // similarity between the backtraces. If it does happen,
+                // abandon top trimming entirely.
+                frames_to_trim.retain(|_, v| *v == TB::Bottom);
+                break;
+            }
+            if frames1[i1].ip() != frames2[i2].ip() {
+                break;
+            }
+            frames_to_trim.insert(frames1[i1].ip() as usize, TB::Top);
+            i1 += 1;
+            i2 += 1;
+        }
+
+        let (mut i1, mut i2) = (frames1.len() - 1, frames2.len() - 1);
+        loop {
+            if i1 == 0 || i2 == 0 {
+                // This should never happen in practice, it's too much
+                // similarity between the backtraces. If it does happen,
+                // abandon bottom trimming entirely.
+                frames_to_trim.retain(|_, v| *v == TB::Top);
+                break;
+            }
+            if frames1[i1].ip() != frames2[i2].ip() {
+                break;
+            }
+            frames_to_trim.insert(frames1[i1].ip() as usize, TB::Bottom);
+            i1 -= 1;
+            i2 -= 1;
+        }
+
+        frames_to_trim
     }
 
-    // The top frame symbols in a heap profiling backtrace vary significantly
-    // (depending on build configuration, platform, and program point). Some
-    // examples:
+    // The top frame symbols in a trimmed heap profiling backtrace vary
+    // significantly, depending on build configuration, platform, and program
+    // point, and look something like this (Mac or Linux release build, Dec
+    // 2021):
+    // - 0x103ad464c: <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
+    // - 0x103acac99: __rg_alloc                    // sometimes missing
+    // - 0x103acfe47: alloc::alloc::alloc           // sometimes missing
+    // - 0x103acfe47: alloc::alloc::Global::alloc_impl
+    // - 0x103acfe47: <alloc::alloc::Global as core::alloc::Allocator>::allocate
+    // - 0x103acfe47: alloc::alloc::exchange_malloc // sometimes missing
+    // - 0x103acfe47: [allocation point in program being profiled]
     //
-    // Linux, debug and release (Nov 2021)
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-    // - __rg_alloc
-    // - alloc::alloc::alloc
-    // - alloc::alloc::Global::alloc_impl
-    // - <alloc::alloc::Global as core::alloc::Allocator>::allocate
-    // - alloc::alloc::exchange_malloc              // sometimes missing
-    // - [allocation point in program being profiled]
-    //
-    // Mac, debug (Nov 2021)
-    // - [...backtrace library frames...]
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-    // - __rg_alloc
-    // - alloc::alloc::alloc
-    // - alloc::alloc::Global::alloc_impl
-    // - <alloc::alloc::Global as core::alloc::Allocator>::allocate
-    // - alloc::alloc::exchange_malloc              // sometimes missing
-    // - [allocation point in program being profiled]
-    //
-    // Mac, release (Nov 2021)
-    // - [...backtrace library frames...]
-    // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
-    // - alloc::alloc::alloc                        // sometimes missing
-    // - [allocation point in program being profiled]
-    //
-    // Such frames are boring and clog up the output. So we scan backwards for
-    // the first frame that looks like it comes from allocator code. We keep
-    // that frame, but discard everything before it. If we don't find any such
+    // We scan backwards for the first frame that looks like it comes from
+    // allocator code, and all frames before it. If we don't find any such
     // frames, we show from frame 0, i.e. all frames.
     //
     // Note: this is a little dangerous. When deciding if a new backtrace has
-    // been seen before, we consider all the IP addresses within it. And the
-    // now we trim some of those. It's possible that this will result in some
+    // been seen before, we consider all the IP addresses within it. And then
+    // we trim some of those. It's possible that this will result in some
     // previously distinct traces becoming the same, which makes dh_view.html
     // abort. If that ever happens, look to see if something is going wrong
     // here.
@@ -1244,6 +1365,9 @@ impl Backtrace {
         // - <alloc::alloc::Global as core::alloc::Allocator>::{allocate,grow}
         // - <dhat::Alloc as core::alloc::global::GlobalAlloc>::alloc
         // - __rg_{alloc,realloc}
+        //
+        // Be careful when changing this, because to do it properly requires
+        // testing both debug and release builds on multiple platforms.
         self.first_symbol_to_show(|s| {
             s.starts_with("alloc::alloc::")
                 || s.starts_with("<alloc::alloc::")
@@ -1252,19 +1376,14 @@ impl Backtrace {
         })
     }
 
-    // Like `first_heap_symbol_to_show()`, but for ad hoc profiling. Some
-    // examples of top frame symbols in an ad hoc profiling backtrace:
+    // The top frame symbols in a trimmed ad hoc profiling backtrace are always
+    // the same, something like this (Mac or Linux release build, Dec 2021):
+    // - 0x10cc1f504: dhat::ad_hoc_event
+    // - 0x10cc1954d: [dhat::ad_hoc_event call site in program being profiled]
     //
-    // Linux, debug and release (Nov 2021)
-    // - dhat::ad_hoc_event
-    // - [dhat::ad_hoc_event call site in program being profiled]
-    //
-    // Mac, debug and release (Nov 2021)
-    // - [...backtrace library frames...]
-    // - dhat::ad_hoc_event
-    // - [dhat::ad_hoc_event call site in program being profiled]
+    // So need not trim frames, and can show from frame 0 onward.
     fn first_ad_hoc_symbol_to_show(&self) -> usize {
-        self.first_symbol_to_show(|s| s == "dhat::ad_hoc_event")
+        0
     }
 
     // Find the first symbol to show, based on the predicate `p`.
@@ -1290,41 +1409,39 @@ impl Backtrace {
         0
     }
 
-    // The bottom frame symbols in a backtrace (those below `main`) are typically
-    // the same, and look something like this:
-    // - main
-    // - core::ops::function::FnOnce::call_once (function.rs:227:5)
-    // - std::sys_common::backtrace::__rust_begin_short_backtrace (backtrace.rs:137:18)
-    // - std::rt::lang_start::{{closure}} (rt.rs:66:18)
-    // - core::ops::function::impls::<impl core::ops::function::FnOnce<A> for &F>::call_once (function.rs:259:13)
-    // - std::panicking::try::do_call (panicking.rs:373:40)
-    // - std::panicking::try (panicking.rs:337:19)
-    // - std::panic::catch_unwind (panic.rs:379:14)
-    // - std::rt::lang_start_internal (rt.rs:51:25)
-    // - std::rt::lang_start (rt.rs:65:5)
-    // - _main (???:0:0)
-    //
-    // Such frames are boring and clog up the output. So we compare the bottom
-    // frames with those obtained when the `Globals` value was created. Those that
-    // overlap in the two cases are the common, uninteresting ones, and we discard
-    // them.
-    //
-    // Note: this is a little dangerous. See the comment on `first_symbol_to_show()`
-    // above for more detail.
-    fn last_frame_ip_to_show(&self, start_bt: &Backtrace) -> Option<*mut std::ffi::c_void> {
-        let self_frames = self.0.frames();
-        let start_frames = start_bt.0.frames();
-        let (mut i, mut j) = (self_frames.len() - 1, start_frames.len() - 1);
-        loop {
-            if self_frames[i].ip() != start_frames[j].ip() {
-                return Some(self_frames[i].ip());
+    // Useful for debugging.
+    #[allow(dead_code)]
+    fn eprint(&self) {
+        for frame in self.0.frames().iter() {
+            for symbol in frame.symbols().iter() {
+                eprintln!("{}", Backtrace::frame_to_string(&frame, &symbol));
             }
-            if i == 0 || j == 0 {
-                return None;
-            }
-            i -= 1;
-            j -= 1;
         }
+    }
+
+    fn frame_to_string(
+        frame: &backtrace::BacktraceFrame,
+        symbol: &backtrace::BacktraceSymbol,
+    ) -> String {
+        format!(
+            // Use `{:#}` to print the "alternate" form of the
+            // symbol name, which omits the trailing hash (e.g.
+            // `::ha68e4508a38cc95a`).
+            "{:?}: {:#} ({:#}:{}:{})",
+            frame.ip(),
+            symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
+            // We have the full path, but that's typically
+            // very long and clogs up the output greatly.
+            // So just use the filename, which is usually
+            // good enough.
+            symbol
+                .filename()
+                .and_then(|path| path.file_name())
+                .and_then(|file_name| file_name.to_str())
+                .unwrap_or("???"),
+            symbol.lineno().unwrap_or(0),
+            symbol.colno().unwrap_or(0),
+        )
     }
 }
 

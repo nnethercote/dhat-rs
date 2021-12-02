@@ -19,7 +19,7 @@ fn main() {
     {
         let _profiler = dhat::ProfilerBuilder::new()
             .ad_hoc()
-            .backtrace_len(usize::MAX)
+            .trim(Some(usize::MAX))
             .save_to_memory(&mut mem)
             .eprint_json()
             .build();

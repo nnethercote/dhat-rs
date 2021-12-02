@@ -14,7 +14,7 @@ fn main() {
     let mut mem = std::string::String::new();
     {
         let _profiler = dhat::ProfilerBuilder::new()
-            .backtrace_len(usize::MAX)
+            .trim(Some(usize::MAX))
             .save_to_memory(&mut mem)
             .eprint_json()
             .build();
@@ -184,6 +184,10 @@ fn main() {
 
     // This stuff should be removed by backtrace trimming.
     assert!(n("backtrace::"));
+    assert!(n("alloc::alloc::Global::alloc_impl"));
+    assert!(n("<dhat::Alloc as core::alloc::global::GlobalAlloc>"));
+    assert!(n("alloc::alloc::Global::alloc_impl"));
+    assert!(n("__rg_"));
     assert!(n("lang_start::"));
     assert!(n("call_once::"));
     assert!(n("catch_unwind::"));
