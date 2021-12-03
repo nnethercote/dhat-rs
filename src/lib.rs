@@ -658,13 +658,14 @@ impl Globals {
         } else {
             let write = || -> std::io::Result<()> {
                 let file = File::create(&self.filename)?;
-                // `to_writer` produces JSON that is compact,
-                // `to_writer_pretty` produces JSON that is readable, and this
-                // code gives us JSON that is both. Ideally it would be even
-                // more compact, more like what DHAT produces, e.g. no spaces
-                // after `:`, and `fs` arrays on a single line, but this is as
-                // good as we can easily achieve.
-                let formatter = serde_json::ser::PrettyFormatter::with_indent(b" ");
+                // `to_writer` produces JSON that is compact.
+                // `to_writer_pretty` produces JSON that is readable. This code
+                // gives us JSON that is fairly compact and fairly readable.
+                // Ideally it would be more like what DHAT produces, e.g. one
+                // space indents, no spaces after `:` and `,`, and `fs` arrays
+                // on a single line, but this is as good as we can easily
+                // achieve.
+                let formatter = serde_json::ser::PrettyFormatter::with_indent(b"");
                 let mut ser = serde_json::Serializer::with_formatter(&file, formatter);
                 json.serialize(&mut ser)?;
                 Ok(())
