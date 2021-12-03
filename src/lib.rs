@@ -1062,10 +1062,7 @@ macro_rules! new_backtrace {
         }
 
         // Get the backtrace.
-        new_backtrace_inner(
-            $g.trim,
-            $g.frames_to_trim.as_ref().unwrap(),
-        )
+        new_backtrace_inner($g.trim, $g.frames_to_trim.as_ref().unwrap())
     }};
 }
 
@@ -1081,10 +1078,7 @@ macro_rules! new_backtrace {
 // `new_backtrace`. The frame for this function will be removed by top frame
 // trimming.
 #[inline(never)]
-fn new_backtrace_inner(
-    trim: Option<usize>,
-    frames_to_trim: &FxHashMap<usize, TB>,
-) -> Backtrace {
+fn new_backtrace_inner(trim: Option<usize>, frames_to_trim: &FxHashMap<usize, TB>) -> Backtrace {
     // Get the backtrace, trimming if necessary at the top and bottom and for
     // length.
     let mut frames = Vec::new();
@@ -1092,9 +1086,9 @@ fn new_backtrace_inner(
         let ip = frame.ip() as usize;
         if trim.is_some() {
             match frames_to_trim.get(&ip) {
-                Some(TB::Top) => return true, // ignore frame and continue
+                Some(TB::Top) => return true,     // ignore frame and continue
                 Some(TB::Bottom) => return false, // ignore frame and stop
-                _ => {} // use this frame
+                _ => {}                           // use this frame
             }
         }
 
