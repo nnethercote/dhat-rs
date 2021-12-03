@@ -1408,7 +1408,7 @@ impl Backtrace {
     fn eprint(&self) {
         for frame in self.0.frames().iter() {
             for symbol in frame.symbols().iter() {
-                eprintln!("{}", Backtrace::frame_to_string(&frame, &symbol));
+                eprintln!("{}", Backtrace::frame_to_string(frame, symbol));
             }
         }
     }
