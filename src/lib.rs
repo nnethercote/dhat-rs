@@ -49,6 +49,8 @@
 //! [profile.release]
 //! debug = 1
 //! ```
+//! You should only use `dhat` in release builds. Debug builds are too slow to
+//! be useful.
 //!
 //! # Setup (heap profiling)
 //!
@@ -1419,16 +1421,14 @@ impl Backtrace {
         symbol: &backtrace::BacktraceSymbol,
     ) -> String {
         format!(
-            // Use `{:#}` to print the "alternate" form of the
-            // symbol name, which omits the trailing hash (e.g.
-            // `::ha68e4508a38cc95a`).
+            // Use `{:#}` to print the "alternate" form of the symbol name,
+            // which omits the trailing hash (e.g. `::ha68e4508a38cc95a`).
             "{:?}: {:#} ({:#}:{}:{})",
             frame.ip(),
             symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-            // We have the full path, but that's typically
-            // very long and clogs up the output greatly.
-            // So just use the filename, which is usually
-            // good enough.
+            // We have the full path, but that's typically very long and clogs
+            // up the output greatly. So just use the filename, which is
+            // usually good enough.
             symbol
                 .filename()
                 .and_then(|path| path.file_name())
