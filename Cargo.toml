@@ -25,7 +25,11 @@ thousands = "0.2"
 [dev-dependencies]
 serial_test = "0.5"
 
-# This profile is used for `cargo test --release`, and some tests depend on
-# having debug info.
+# Some tests require debug info. `cargo test` enables debug info, but `cargo
+# test --release` does not, so we enable it here. In Rust 1.56 and earlier,
+# `profile.bench` was used for `cargo test --release`, but in Rust 1.57 this
+# changed to `profile.release`. So we specify both.
 [profile.bench]
+debug = 1
+[profile.release]
 debug = 1
