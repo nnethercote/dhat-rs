@@ -163,32 +163,30 @@
 //!
 //! DHAT's viewer shows a tree with nodes that look like this.
 //! ```text
-//! PP 1.1/6 {
-//!   Total:     1,024 bytes (81.53%, 3,335,504.89/s) in 1 blocks (16.67%, 3,257.33/s), avg size 1,024 bytes, avg lifetime 61 µs (19.87% of program duration)
-//! PP 1/1 {
-//!   Total:     1,024 bytes (100%, 18,962,962.96/s) in 1 blocks (100%, 18,518.52/s), avg size 1,024 bytes, avg lifetime 23 µs (42.59% of program duration)
-//!   At t-gmax: 1,024 bytes (100%) in 1 blocks (100%), avg size 1,024 bytes
+//! PP 1.1/2 {
+//!   Total:     1,024 bytes (98.46%, 14,422,535.21/s) in 1 blocks (50%, 14,084.51/s), avg size 1,024 bytes, avg lifetime 35 µs (49.3% of program duration)
+//!   Max:       1,024 bytes in 1 blocks, avg size 1,024 bytes
+//!   At t-gmax: 1,024 bytes (98.46%) in 1 blocks (50%), avg size 1,024 bytes
 //!   At t-end:  1,024 bytes (100%) in 1 blocks (100%), avg size 1,024 bytes
 //!   Allocated at {
-//!     #0: [root]
-//!     #1: 0x10983c4db: <alloc::alloc::Global as core::alloc::Allocator>::allocate (src/alloc.rs:226:9)
-//!     #2: 0x10983c4db: alloc::raw_vec::RawVec<T,A>::allocate_in (src/raw_vec.rs:207:45)
-//!     #3: 0x10983c4db: alloc::raw_vec::RawVec<T,A>::with_capacity_in (src/raw_vec.rs:146:9)
-//!     #4: 0x10983c4db: alloc::vec::Vec<T,A>::with_capacity_in (vec/mod.rs:609:20)
-//!     #5: 0x10983c4db: alloc::vec::Vec<T>::with_capacity (vec/mod.rs:470:9)
-//!     #6: 0x10983c4db: std::io::buffered::bufwriter::BufWriter<W>::with_capacity (buffered/bufwriter.rs:115:33)
-//!     #7: 0x10983c4db: std::io::buffered::linewriter::LineWriter<W>::with_capacity (buffered/linewriter.rs:109:29)
-//!     #8: 0x10983c4db: std::io::buffered::linewriter::LineWriter<W>::new (buffered/linewriter.rs:89:9)
-//!     #9: 0x10983c4db: std::io::stdio::stdout::{{closure}} (io/stdio.rs:680:58)
-//!     #10: 0x10983c4db: std::lazy::SyncOnceCell<T>::get_or_init_pin::{{closure}} (src/lazy.rs:375:25)
-//!     #11: 0x10983c4db: std::sync::once::Once::call_once_force::{{closure}} (sync/once.rs:320:40)
-//!     #12: 0x10985d64c: std::sync::once::Once::call_inner (sync/once.rs:419:21)
-//!     #13: 0x109839bdb: std::sync::once::Once::call_once_force (sync/once.rs:320:9)
-//!     #14: 0x109839bdb: std::lazy::SyncOnceCell<T>::get_or_init_pin (src/lazy.rs:374:9)
-//!     #15: 0x109839bdb: std::io::stdio::stdout (io/stdio.rs:679:16)
-//!     #16: 0x109839bdb: std::io::stdio::print_to (io/stdio.rs:1196:21)
-//!     #17: 0x109839bdb: std::io::stdio::_print (io/stdio.rs:1209:5)
-//!     #18: 0x1097e7fc9: dhatter::main (src/main.rs:8:5)
+//!     #1: 0x10ae8441b: <alloc::alloc::Global as core::alloc::Allocator>::allocate (alloc/src/alloc.rs:226:9)
+//!     #2: 0x10ae8441b: alloc::raw_vec::RawVec<T,A>::allocate_in (alloc/src/raw_vec.rs:207:45)
+//!     #3: 0x10ae8441b: alloc::raw_vec::RawVec<T,A>::with_capacity_in (alloc/src/raw_vec.rs:146:9)
+//!     #4: 0x10ae8441b: alloc::vec::Vec<T,A>::with_capacity_in (src/vec/mod.rs:609:20)
+//!     #5: 0x10ae8441b: alloc::vec::Vec<T>::with_capacity (src/vec/mod.rs:470:9)
+//!     #6: 0x10ae8441b: std::io::buffered::bufwriter::BufWriter<W>::with_capacity (io/buffered/bufwriter.rs:115:33)
+//!     #7: 0x10ae8441b: std::io::buffered::linewriter::LineWriter<W>::with_capacity (io/buffered/linewriter.rs:109:29)
+//!     #8: 0x10ae8441b: std::io::buffered::linewriter::LineWriter<W>::new (io/buffered/linewriter.rs:89:9)
+//!     #9: 0x10ae8441b: std::io::stdio::stdout::{{closure}} (src/io/stdio.rs:680:58)
+//!     #10: 0x10ae8441b: std::lazy::SyncOnceCell<T>::get_or_init_pin::{{closure}} (std/src/lazy.rs:375:25)
+//!     #11: 0x10ae8441b: std::sync::once::Once::call_once_force::{{closure}} (src/sync/once.rs:320:40)
+//!     #12: 0x10aea564c: std::sync::once::Once::call_inner (src/sync/once.rs:419:21)
+//!     #13: 0x10ae81b1b: std::sync::once::Once::call_once_force (src/sync/once.rs:320:9)
+//!     #14: 0x10ae81b1b: std::lazy::SyncOnceCell<T>::get_or_init_pin (std/src/lazy.rs:374:9)
+//!     #15: 0x10ae81b1b: std::io::stdio::stdout (src/io/stdio.rs:679:16)
+//!     #16: 0x10ae81b1b: std::io::stdio::print_to (src/io/stdio.rs:1196:21)
+//!     #17: 0x10ae81b1b: std::io::stdio::_print (src/io/stdio.rs:1209:5)
+//!     #18: 0x10ae2fe20: dhatter::main (dhatter/src/main.rs:8:5)
 //!   }
 //! }
 //! ```
