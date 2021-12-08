@@ -217,7 +217,9 @@
 //!
 //! `dhat` lets you write tests that checks that a certain piece of code does a
 //! certain amount of allocation when it runs. This is sometimes called "high
-//! water mark" testing.
+//! water mark" testing. Sometimes it is precise ("this code should do exactly
+//! 96 allocations") and sometimes it is less precise ("the exact amount of
+//! memory allocated by this code shouldn't exceed 10 MiB").
 //!
 //! Each such test needs to be in a separate integration test in your crate's
 //! `tests/` directory. (It cannot be within a unit test, and there cannot be
@@ -1498,10 +1500,12 @@ pub struct HeapStats {
     /// Number of bytes currently allocated.
     pub curr_bytes: usize,
 
-    /// Number of blocks (a.k.a. allocations) allocated at the global peak.
+    /// Number of blocks (a.k.a. allocations) allocated at the global peak,
+    /// i.e. when `curr_bytes` peaked.
     pub max_blocks: usize,
 
-    /// Number of bytes allocated at the global peak.
+    /// Number of bytes allocated at the global peak, i.e. when `curr_bytes`
+    /// peaked.
     pub max_bytes: usize,
 }
 
