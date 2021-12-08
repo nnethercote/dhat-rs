@@ -214,10 +214,11 @@
 //! # Heap usage testing
 //!
 //! `dhat` lets you write tests that checks that a certain piece of code does a
-//! certain amount of allocation when it runs. This is sometimes called "high
-//! water mark" testing. Sometimes it is precise ("this code should do exactly
-//! 96 allocations") and sometimes it is less precise ("the exact amount of
-//! memory allocated by this code shouldn't exceed 10 MiB").
+//! certain amount of heap allocation when it runs. This is sometimes called
+//! "high water mark" testing. Sometimes it is precise (e.g. "this code should
+//! do exactly 96 allocations" or "this code should free all allocations before
+//! finishing") and sometimes it is less precise (e.g. "the peak heap usage of
+//! this code shouldn't exceed 10 MiB").
 //!
 //! Each such test needs to be in a separate integration test in your crate's
 //! `tests/` directory. (It cannot be within a unit test, and there cannot be
