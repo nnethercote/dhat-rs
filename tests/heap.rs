@@ -165,10 +165,10 @@ fn main() {
             assert!(y(
                 "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
             ));
-            assert!(y("heap::main (tests/heap.rs:37:0)")); // v3
-            assert!(y("heap::main (tests/heap.rs:40:0)")); // v5
-            assert!(y("heap::main (tests/heap.rs:41:0)")); // v6
-            assert!(y("heap::main (tests/heap.rs:51:0)")); // _v7
+            assert!(y("heap::main (tests\\heap.rs:37:0)")); // v3
+            assert!(y("heap::main (tests\\heap.rs:40:0)")); // v5
+            assert!(y("heap::main (tests\\heap.rs:41:0)")); // v6
+            assert!(y("heap::main (tests\\heap.rs:51:0)")); // _v7
         } else {
             // Stack traces are terrible in Windows release builds.
             assert!(y("RawVec"));
