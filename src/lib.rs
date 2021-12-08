@@ -1476,7 +1476,7 @@ fn trim_path(path: &Path) -> &Path {
     let len = path.components().count();
     if len > N {
         let mut c = path.components();
-        c.by_ref().take(len - N).for_each(drop);
+        c.nth(len - (N + 1));
         c.as_path()
     } else {
         path
