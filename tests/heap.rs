@@ -165,10 +165,10 @@ fn main() {
             assert!(y(
                 "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
             ));
-            assert!(y("heap::main (heap.rs:37:0)")); // v3
-            assert!(y("heap::main (heap.rs:40:0)")); // v5
-            assert!(y("heap::main (heap.rs:41:0)")); // v6
-            assert!(y("heap::main (heap.rs:51:0)")); // _v7
+            assert!(y("heap::main (tests/heap.rs:37:0)")); // v3
+            assert!(y("heap::main (tests/heap.rs:40:0)")); // v5
+            assert!(y("heap::main (tests/heap.rs:41:0)")); // v6
+            assert!(y("heap::main (tests/heap.rs:51:0)")); // _v7
         } else {
             // Stack traces are terrible in Windows release builds.
             assert!(y("RawVec"));
@@ -176,10 +176,10 @@ fn main() {
     } else {
         assert!(y("alloc::vec::Vec<T,A>::push"));
         assert!(y("alloc::vec::Vec<T,A>::reserve"));
-        assert!(y("heap::main (heap.rs:37:9)")); // v3
-        assert!(y("heap::main (heap.rs:40:18)")); // v5
-        assert!(y("heap::main (heap.rs:41:22)")); // v6
-        assert!(y("heap::main (heap.rs:51:22)")); // _v7
+        assert!(y("heap::main (tests/heap.rs:37:9)")); // v3
+        assert!(y("heap::main (tests/heap.rs:40:18)")); // v5
+        assert!(y("heap::main (tests/heap.rs:41:22)")); // v6
+        assert!(y("heap::main (tests/heap.rs:51:22)")); // _v7
     }
 
     // This stuff should be removed by backtrace trimming.

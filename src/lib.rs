@@ -165,27 +165,30 @@
 //! ```text
 //! PP 1.1/6 {
 //!   Total:     1,024 bytes (81.53%, 3,335,504.89/s) in 1 blocks (16.67%, 3,257.33/s), avg size 1,024 bytes, avg lifetime 61 µs (19.87% of program duration)
-//!   Max:       1,024 bytes in 1 blocks, avg size 1,024 bytes
-//!   At t-gmax: 1,024 bytes (81.53%) in 1 blocks (16.67%), avg size 1,024 bytes
-//!   At t-end:  1,024 bytes (81.53%) in 1 blocks (16.67%), avg size 1,024 bytes
+//! PP 1/1 {
+//!   Total:     1,024 bytes (100%, 18,962,962.96/s) in 1 blocks (100%, 18,518.52/s), avg size 1,024 bytes, avg lifetime 23 µs (42.59% of program duration)
+//!   At t-gmax: 1,024 bytes (100%) in 1 blocks (100%), avg size 1,024 bytes
+//!   At t-end:  1,024 bytes (100%) in 1 blocks (100%), avg size 1,024 bytes
 //!   Allocated at {
-//!     #1: 0x10c1e4108: <alloc::alloc::Global as core::alloc::AllocRef>::alloc (alloc.rs:203:9)
-//!     #2: 0x10c1e4108: alloc::raw_vec::RawVec<T,A>::allocate_in (raw_vec.rs:186:45)
-//!     #3: 0x10c1e4108: alloc::raw_vec::RawVec<T,A>::with_capacity_in (raw_vec.rs:161:9)
-//!     #4: 0x10c1e4108: alloc::raw_vec::RawVec<T>::with_capacity (raw_vec.rs:92:9)
-//!     #5: 0x10c1e4108: alloc::vec::Vec<T>::with_capacity (vec.rs:355:20)
-//!     #6: 0x10c1e4108: std::io::buffered::BufWriter<W>::with_capacity (buffered.rs:517:46)
-//!     #7: 0x10c1e4108: std::io::buffered::LineWriter<W>::with_capacity (buffered.rs:925:29)
-//!     #8: 0x10c1e4108: std::io::buffered::LineWriter<W>::new (buffered.rs:905:9)
-//!     #9: 0x10c1e4108: std::io::stdio::stdout::stdout_init (stdio.rs:543:65)
-//!     #10: 0x10c1e4108: std::io::lazy::Lazy<T>::init (lazy.rs:57:19)
-//!     #11: 0x10c1e4108: std::io::lazy::Lazy<T>::get (lazy.rs:33:18)
-//!     #12: 0x10c1e4108: std::io::stdio::stdout (stdio.rs:536:25)
-//!     #13: 0x10c1e4ccb: std::io::stdio::print_to::{{closure}} (stdio.rs:890:13)
-//!     #14: 0x10c1e4ccb: std::thread::local::LocalKey<T>::try_with (local.rs:265:16)
-//!     #15: 0x10c1e4ccb: std::io::stdio::print_to (stdio.rs:879:18)
-//!     #16: 0x10c1e4ccb: std::io::stdio::_print (stdio.rs:907:5)
-//!     #17: 0x10c0d6826: heap::main (heap.rs:9:5)
+//!     #0: [root]
+//!     #1: 0x10983c4db: <alloc::alloc::Global as core::alloc::Allocator>::allocate (src/alloc.rs:226:9)
+//!     #2: 0x10983c4db: alloc::raw_vec::RawVec<T,A>::allocate_in (src/raw_vec.rs:207:45)
+//!     #3: 0x10983c4db: alloc::raw_vec::RawVec<T,A>::with_capacity_in (src/raw_vec.rs:146:9)
+//!     #4: 0x10983c4db: alloc::vec::Vec<T,A>::with_capacity_in (vec/mod.rs:609:20)
+//!     #5: 0x10983c4db: alloc::vec::Vec<T>::with_capacity (vec/mod.rs:470:9)
+//!     #6: 0x10983c4db: std::io::buffered::bufwriter::BufWriter<W>::with_capacity (buffered/bufwriter.rs:115:33)
+//!     #7: 0x10983c4db: std::io::buffered::linewriter::LineWriter<W>::with_capacity (buffered/linewriter.rs:109:29)
+//!     #8: 0x10983c4db: std::io::buffered::linewriter::LineWriter<W>::new (buffered/linewriter.rs:89:9)
+//!     #9: 0x10983c4db: std::io::stdio::stdout::{{closure}} (io/stdio.rs:680:58)
+//!     #10: 0x10983c4db: std::lazy::SyncOnceCell<T>::get_or_init_pin::{{closure}} (src/lazy.rs:375:25)
+//!     #11: 0x10983c4db: std::sync::once::Once::call_once_force::{{closure}} (sync/once.rs:320:40)
+//!     #12: 0x10985d64c: std::sync::once::Once::call_inner (sync/once.rs:419:21)
+//!     #13: 0x109839bdb: std::sync::once::Once::call_once_force (sync/once.rs:320:9)
+//!     #14: 0x109839bdb: std::lazy::SyncOnceCell<T>::get_or_init_pin (src/lazy.rs:374:9)
+//!     #15: 0x109839bdb: std::io::stdio::stdout (io/stdio.rs:679:16)
+//!     #16: 0x109839bdb: std::io::stdio::print_to (io/stdio.rs:1196:21)
+//!     #17: 0x109839bdb: std::io::stdio::_print (io/stdio.rs:1209:5)
+//!     #18: 0x1097e7fc9: dhatter::main (src/main.rs:8:5)
 //!   }
 //! }
 //! ```
@@ -1426,14 +1429,11 @@ impl Backtrace {
             "{:?}: {:#} ({:#}:{}:{})",
             frame.ip(),
             symbol.name().unwrap_or_else(|| SymbolName::new(b"???")),
-            // We have the full path, but that's typically very long and clogs
-            // up the output greatly. So just use the filename, which is
-            // usually good enough.
-            symbol
-                .filename()
-                .and_then(|path| path.file_name())
-                .and_then(|file_name| file_name.to_str())
-                .unwrap_or("???"),
+            match symbol.filename() {
+                Some(path) => trim_path(path),
+                None => Path::new("???"),
+            }
+            .display(),
             symbol.lineno().unwrap_or(0),
             symbol.colno().unwrap_or(0),
         )
@@ -1465,6 +1465,20 @@ impl Hash for Backtrace {
         for frame in self.0.frames().iter() {
             frame.ip().hash(state);
         }
+    }
+}
+
+// Trim a path down to its parent and filename if possible (e.g.
+// `/aa/bb/cc/dd.rs` becomes `cc/dd.rs`), otherwise return `path`
+// unchanged.
+fn trim_path(path: &Path) -> &Path {
+    let len = path.components().count();
+    if len >= 2 {
+        let mut c = path.components();
+        c.by_ref().take(len - 2).for_each(drop);
+        c.as_path()
+    } else {
+        path
     }
 }
 
@@ -1833,5 +1847,29 @@ pub fn assert_is_panic<R, F: FnOnce() -> R + std::panic::UnwindSafe>(f: F, expec
         }
     } else {
         panic!("match_panic: Not an error");
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::trim_path;
+    use std::path::Path;
+
+    #[test]
+    // njn: todo
+    fn test_trim_path() {
+        std::assert_eq!(trim_path(Path::new("")), Path::new(""));
+        std::assert_eq!(trim_path(Path::new("/")), Path::new("/"));
+        std::assert_eq!(trim_path(Path::new("aa.rs")), Path::new("aa.rs"));
+        std::assert_eq!(trim_path(Path::new("bb/aa.rs")), Path::new("bb/aa.rs"));
+        std::assert_eq!(trim_path(Path::new("/bb/aa.rs")), Path::new("bb/aa.rs"));
+        std::assert_eq!(
+            trim_path(Path::new("dd/cc/bb/aa.rs")),
+            Path::new("bb/aa.rs")
+        );
+        std::assert_eq!(
+            trim_path(Path::new("/dd/cc/bb/aa.rs")),
+            Path::new("bb/aa.rs")
+        );
     }
 }
