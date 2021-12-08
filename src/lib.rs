@@ -1468,14 +1468,15 @@ impl Hash for Backtrace {
     }
 }
 
-// Trim a path down to its parent and filename if possible (e.g.
-// `/aa/bb/cc/dd.rs` becomes `cc/dd.rs`), otherwise return `path`
+// Trims a path with more than three components down to three (e.g.
+// `/aa/bb/cc/dd.rs` becomes `bb/cc/dd.rs`), otherwise returns `path`
 // unchanged.
 fn trim_path(path: &Path) -> &Path {
+    const N: usize = 3;
     let len = path.components().count();
-    if len >= 2 {
+    if len > N {
         let mut c = path.components();
-        c.by_ref().take(len - 2).for_each(drop);
+        c.by_ref().take(len - N).for_each(drop);
         c.as_path()
     } else {
         path
@@ -1861,15 +1862,18 @@ mod test {
         std::assert_eq!(trim_path(Path::new("")), Path::new(""));
         std::assert_eq!(trim_path(Path::new("/")), Path::new("/"));
         std::assert_eq!(trim_path(Path::new("aa.rs")), Path::new("aa.rs"));
+        std::assert_eq!(trim_path(Path::new("/aa.rs")), Path::new("/aa.rs"));
         std::assert_eq!(trim_path(Path::new("bb/aa.rs")), Path::new("bb/aa.rs"));
-        std::assert_eq!(trim_path(Path::new("/bb/aa.rs")), Path::new("bb/aa.rs"));
+        std::assert_eq!(trim_path(Path::new("/bb/aa.rs")), Path::new("/bb/aa.rs"));
+        std::assert_eq!(trim_path(Path::new("cc/bb/aa.rs")), Path::new("cc/bb/aa.rs"));
+        std::assert_eq!(trim_path(Path::new("/cc/bb/aa.rs")), Path::new("cc/bb/aa.rs"));
         std::assert_eq!(
             trim_path(Path::new("dd/cc/bb/aa.rs")),
-            Path::new("bb/aa.rs")
+            Path::new("cc/bb/aa.rs")
         );
         std::assert_eq!(
             trim_path(Path::new("/dd/cc/bb/aa.rs")),
-            Path::new("bb/aa.rs")
+            Path::new("cc/bb/aa.rs")
         );
     }
 }

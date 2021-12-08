@@ -130,21 +130,23 @@ fn main() {
     };
     assert!(y("[root]"));
     assert!(y("dhat::ad_hoc_event"));
+
+    // These tests will fail if the repo directory isn't called `dhat-rs`.
     if cfg!(windows) {
         // Some frames are missing on Windows, not sure why.
-        assert!(y("ad_hoc::f2 (tests\\ad-hoc.rs:5:0)"));
-        assert!(y("ad_hoc::f2 (tests\\ad-hoc.rs:6:0)"));
-        //assert!(y("ad_hoc::f1 (tests\\ad-hoc.rs:10:0)"));
-        assert!(y("ad_hoc::f1 (tests\\ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (tests\\ad-hoc.rs:33:0)"));
-        //assert!(y("ad_hoc::main (tests\\ad-hoc.rs:34:0)"));
+        assert!(y("ad_hoc::f2 (dhat-rs\\tests\\ad-hoc.rs:5:0)"));
+        assert!(y("ad_hoc::f2 (dhat-rs\\tests\\ad-hoc.rs:6:0)"));
+        //assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:10:0)"));
+        assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:11:0)"));
+        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:33:0)"));
+        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:34:0)"));
     } else {
-        assert!(y("ad_hoc::f2 (tests/ad-hoc.rs:5:5)"));
-        assert!(y("ad_hoc::f2 (tests/ad-hoc.rs:6:5)"));
-        assert!(y("ad_hoc::f1 (tests/ad-hoc.rs:10:5)"));
-        assert!(y("ad_hoc::f1 (tests/ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (tests/ad-hoc.rs:33:9)"));
-        assert!(y("ad_hoc::main (tests/ad-hoc.rs:34:9)"));
+        assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:5:5)"));
+        assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:6:5)"));
+        assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:10:5)"));
+        assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:11:5)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:33:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:34:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
