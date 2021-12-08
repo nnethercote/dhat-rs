@@ -1865,8 +1865,14 @@ mod test {
         std::assert_eq!(trim_path(Path::new("/aa.rs")), Path::new("/aa.rs"));
         std::assert_eq!(trim_path(Path::new("bb/aa.rs")), Path::new("bb/aa.rs"));
         std::assert_eq!(trim_path(Path::new("/bb/aa.rs")), Path::new("/bb/aa.rs"));
-        std::assert_eq!(trim_path(Path::new("cc/bb/aa.rs")), Path::new("cc/bb/aa.rs"));
-        std::assert_eq!(trim_path(Path::new("/cc/bb/aa.rs")), Path::new("cc/bb/aa.rs"));
+        std::assert_eq!(
+            trim_path(Path::new("cc/bb/aa.rs")),
+            Path::new("cc/bb/aa.rs")
+        );
+        std::assert_eq!(
+            trim_path(Path::new("/cc/bb/aa.rs")),
+            Path::new("cc/bb/aa.rs")
+        );
         std::assert_eq!(
             trim_path(Path::new("dd/cc/bb/aa.rs")),
             Path::new("cc/bb/aa.rs")
