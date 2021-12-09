@@ -218,7 +218,7 @@
 //! "high water mark" testing. Sometimes it is precise (e.g. "this code should
 //! do exactly 96 allocations" or "this code should free all allocations before
 //! finishing") and sometimes it is less precise (e.g. "the peak heap usage of
-//! this code shouldn't exceed 10 MiB").
+//! this code should be less than 10 MiB").
 //!
 //! Each such test needs to be in a separate integration test in your crate's
 //! `tests/` directory. (It cannot be within a unit test, and there cannot be
@@ -226,33 +226,57 @@
 //! involves global state and multiple tests within the same process will
 //! interfere with each other.)
 //!
-//! Your test file will look something like this:
+//! Here is an example showing what is possible:
 //! ```
 //! #[global_allocator]
 //! static ALLOC: dhat::Alloc = dhat::Alloc;
 //!
-//! # fn main() {}
 //! #[test]
-//! fn main() {
+//! fn test1() {
 //!     let _profiler = dhat::ProfilerBuilder::new().testing().build();
 //!
-//!     // Replace this with your code of interest.
 //!     let _v1 = vec![1, 2, 3, 4];
-//!     let _v2 = vec![5, 6, 7, 8];
+//!     let v2 = vec![5, 6, 7, 8];
+//!     drop(v2);
+//!     let v3 = vec![9, 10, 11, 12];
+//!     drop(v3);
 //!
 //!     let stats = dhat::HeapStats::get();
-//!     dhat::assert_eq!(stats.curr_blocks, 2);
-//!     dhat::assert_eq!(stats.curr_bytes, 32);
+//!
+//!     // Three allocations were done in total.
+//!     dhat::assert_eq!(stats.total_blocks, 3);
+//!     dhat::assert_eq!(stats.total_bytes, 48);
+//!
+//!     // At the point of peak heap size, two allocations totalling 32 bytes existed.
+//!     dhat::assert_eq!(stats.max_blocks, 2);
+//!     dhat::assert_eq!(stats.max_bytes, 32);
+//!
+//!     // Now a single allocation remains alive.
+//!     dhat::assert_eq!(stats.curr_blocks, 1);
+//!     dhat::assert_eq!(stats.curr_bytes, 16);
 //! }
 //! ```
 //! The [`testing`](ProfilerBuilder::testing) call puts the profiler into
 //! testing mode, which allows the stats provided by [`HeapStats::get`] to be
 //! checked with [`dhat::assert!`](assert) and similar assertions. These
 //! assertions work much the same as normal assertions, except that if any of
-//! them fail a heap profile will be saved. When viewing the heap profile the
+//! them fail a heap profile will be saved.
+//!
+//! When viewing the heap profile after a failure, the best choice of sort
+//! metric in the viewer will depend on which stat was involved in the
+//! assertion failure.
+//! - `total_blocks`: "Total (blocks)"
+//! - `total_bytes`: "Total (bytes)"
+//! - `max_blocks`/`max_bytes`: "At t-gmax (bytes)"
+//! - `curr_blocks`/`curr_bytes`: "At t-end (bytes)"
 //! "At t-end (bytes)" sort metric will be useful, because it sorts the program
 //! points by the number of bytes allocated when the profiling ended. This
 //! should give you a good understanding of why the assertion failed.
+//!
+//! Note: if you try this example test it may work in a debug build but fail in
+//! a release build. This is because the compiler may optimize away some of the
+//! allocations that are unused. This is a common problem for contrived
+//! examples but less common for real tests.
 //!
 //! # Ad hoc usage testing
 //!
