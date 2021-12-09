@@ -336,8 +336,8 @@ enum TB {
 // Global state that can be accessed from any thread and is therefore protected
 // by a `Mutex`.
 struct Globals {
-    // The filename for the saved data.
-    filename: PathBuf,
+    // The file name for the saved data.
+    file_name: PathBuf,
 
     // Are we in testing mode?
     testing: bool,
@@ -410,14 +410,14 @@ struct HeapGlobals {
 impl Globals {
     fn new(
         testing: bool,
-        filename: PathBuf,
+        file_name: PathBuf,
         trim: Option<usize>,
         eprint_json: bool,
         heap: Option<HeapGlobals>,
     ) -> Self {
         Self {
             testing,
-            filename,
+            file_name,
             trim,
             eprint_json,
             // `None` here because we don't want any frame trimming for this
@@ -687,7 +687,7 @@ impl Globals {
             eprintln!("dhat: The data has been saved to the memory buffer");
         } else {
             let write = || -> std::io::Result<()> {
-                let file = File::create(&self.filename)?;
+                let file = File::create(&self.file_name)?;
                 // `to_writer` produces JSON that is compact.
                 // `to_writer_pretty` produces JSON that is readable. This code
                 // gives us JSON that is fairly compact and fairly readable.
@@ -703,11 +703,11 @@ impl Globals {
             match write() {
                 Ok(()) => eprintln!(
                     "dhat: The data has been saved to {}, and is viewable with dhat/dh_view.html",
-                    self.filename.to_string_lossy()
+                    self.file_name.to_string_lossy()
                 ),
                 Err(e) => eprintln!(
                     "dhat: error: Writing to {} failed: {}",
-                    self.filename.to_string_lossy(),
+                    self.file_name.to_string_lossy(),
                     e
                 ),
             }
@@ -924,7 +924,7 @@ impl<'m> Profiler<'m> {
 pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
-    filename: Option<PathBuf>,
+    file_name: Option<PathBuf>,
     trim: Option<usize>,
     save_to_memory: Option<&'m mut String>,
     eprint_json: bool,
@@ -936,7 +936,7 @@ impl<'m> ProfilerBuilder<'m> {
         Self {
             ad_hoc: false,
             testing: false,
-            filename: None,
+            file_name: None,
             trim: Some(10),
             save_to_memory: None,
             eprint_json: false,
@@ -971,12 +971,12 @@ impl<'m> ProfilerBuilder<'m> {
     ///
     /// # Examples
     /// ```
-    /// let filename = format!("heap-{}.json", std::process::id());
-    /// let _profiler = dhat::ProfilerBuilder::new().filename(filename).build();
+    /// let file_name = format!("heap-{}.json", std::process::id());
+    /// let _profiler = dhat::ProfilerBuilder::new().file_name(file_name).build();
     /// # std::mem::forget(_profiler); // Don't write the file in `cargo tests`
     /// ```
-    pub fn filename<P: AsRef<Path>>(mut self, filename: P) -> Self {
-        self.filename = Some(filename.as_ref().to_path_buf());
+    pub fn file_name<P: AsRef<Path>>(mut self, file_name: P) -> Self {
+        self.file_name = Some(file_name.as_ref().to_path_buf());
         self
     }
 
@@ -1043,8 +1043,8 @@ impl<'m> ProfilerBuilder<'m> {
         let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
         match phase {
             Phase::Pre => {
-                let filename = if let Some(filename) = self.filename {
-                    filename
+                let file_name = if let Some(file_name) = self.file_name {
+                    file_name
                 } else if !self.ad_hoc {
                     PathBuf::from("dhat-heap.json")
                 } else {
@@ -1057,7 +1057,7 @@ impl<'m> ProfilerBuilder<'m> {
                 };
                 *phase = Phase::During(Globals::new(
                     self.testing,
-                    filename,
+                    file_name,
                     self.trim,
                     self.eprint_json,
                     h,
