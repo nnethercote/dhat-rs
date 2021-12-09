@@ -41,7 +41,7 @@
 //!   that occur before or after `main`, within the Rust runtime.
 //! - This crate enables heap usage testing.
 //!
-//! # Configuration
+//! # Configuration (profiling and testing)
 //!
 //! In your `Cargo.toml` file, as well as specifying `dhat` as a dependency,
 //! you should enable source line debug info:
@@ -213,7 +213,7 @@
 //!
 //! # Heap usage testing
 //!
-//! `dhat` lets you write tests that checks that a certain piece of code does a
+//! `dhat` lets you write tests that check that a certain piece of code does a
 //! certain amount of heap allocation when it runs. This is sometimes called
 //! "high water mark" testing. Sometimes it is precise (e.g. "this code should
 //! do exactly 96 allocations" or "this code should free all allocations before
@@ -225,6 +225,14 @@
 //! more than one heap usage test per integration test, because heap profiling
 //! involves global state and multiple tests within the same process will
 //! interfere with each other.)
+//!
+//! Integration tests can only be used to test items from libraries, not
+//! binaries. If you want to do heap usage testing of items from a binary, the
+//! best approach is probably to restructure things so that most of the
+//! functionality is in a library, and the binary is a thin wrapper around the
+//! library.
+//!
+//! Configuration of `Cargo.toml` is much the same as for the profiling use case.
 //!
 //! Here is an example showing what is possible:
 //! ```
@@ -272,11 +280,10 @@
 //! assertion failure.
 //! - `total_blocks`: "Total (blocks)"
 //! - `total_bytes`: "Total (bytes)"
-//! - `max_blocks`/`max_bytes`: "At t-gmax (bytes)"
-//! - `curr_blocks`/`curr_bytes`: "At t-end (bytes)"
-//! "At t-end (bytes)" sort metric will be useful, because it sorts the program
-//! points by the number of bytes allocated when the profiling ended. This
-//! should give you a good understanding of why the assertion failed.
+//! - `max_blocks` or `max_bytes`: "At t-gmax (bytes)"
+//! - `curr_blocks` or `curr_bytes`: "At t-end (bytes)"
+//!
+//! This should give you a good understanding of why the assertion failed.
 //!
 //! Note: if you try this example test it may work in a debug build but fail in
 //! a release build. This is because the compiler may optimize away some of the
@@ -1010,7 +1017,8 @@ impl<'m> ProfilerBuilder<'m> {
     ///   is common for the number of inline frames to equal or even exceed the
     ///   number of "real" frames.
     /// - Backtrace trimming will remove a small number of frames from heap
-    ///   profile backtraces.
+    ///   profile backtraces. The number removed will likely be more in a debug
+    ///   build than in a release build.
     ///
     /// # Examples
     /// ```
