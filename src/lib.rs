@@ -231,7 +231,11 @@
 //! #[global_allocator]
 //! static ALLOC: dhat::Alloc = dhat::Alloc;
 //!
+//! # // Trickiness: `#[test]` is needed in a test, but messes things up here.
+//! # // So we comment it out in a way that will make it show up in the docs.
+//! # /*
 //! #[test]
+//! # */
 //! fn test1() {
 //!     let _profiler = dhat::ProfilerBuilder::new().testing().build();
 //!
@@ -255,6 +259,7 @@
 //!     dhat::assert_eq!(stats.curr_blocks, 1);
 //!     dhat::assert_eq!(stats.curr_bytes, 16);
 //! }
+//! # test1()
 //! ```
 //! The [`testing`](ProfilerBuilder::testing) call puts the profiler into
 //! testing mode, which allows the stats provided by [`HeapStats::get`] to be
