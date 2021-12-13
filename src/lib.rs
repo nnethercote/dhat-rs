@@ -1897,7 +1897,6 @@ mod test {
     use std::path::Path;
 
     #[test]
-    // njn: todo
     fn test_trim_path() {
         std::assert_eq!(trim_path(Path::new("")), Path::new(""));
         std::assert_eq!(trim_path(Path::new("/")), Path::new("/"));
