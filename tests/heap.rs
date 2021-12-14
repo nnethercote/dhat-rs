@@ -14,7 +14,7 @@ fn main() {
     let mut mem = std::string::String::new();
     {
         let _profiler = dhat::ProfilerBuilder::new()
-            .trim(Some(usize::MAX))
+            .trim_backtraces(Some(usize::MAX))
             .save_to_memory(&mut mem)
             .eprint_json()
             .build();

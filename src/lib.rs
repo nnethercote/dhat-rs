@@ -208,8 +208,8 @@
 //! - Common frames at the bottom of backtraces, below `main`, are omitted.
 //!
 //! Backtrace trimming is inexact and if the above heuristics fail more frames
-//! will be shown. [`ProfilerBuilder::trim`] allows (approximate) control of
-//! how deep backtraces will be.
+//! will be shown. [`ProfilerBuilder::trim_backtraces`] allows (approximate)
+//! control of how deep backtraces will be.
 //!
 //! # Heap usage testing
 //!
@@ -355,7 +355,7 @@ struct Globals {
     testing: bool,
 
     // How should we trim backtraces?
-    trim: Option<usize>,
+    trim_backtraces: Option<usize>,
 
     // Print the JSON to stderr when saving it?
     eprint_json: bool,
@@ -423,14 +423,14 @@ impl Globals {
     fn new(
         testing: bool,
         file_name: PathBuf,
-        trim: Option<usize>,
+        trim_backtraces: Option<usize>,
         eprint_json: bool,
         heap: Option<HeapGlobals>,
     ) -> Self {
         Self {
             testing,
             file_name,
-            trim,
+            trim_backtraces,
             eprint_json,
             // `None` here because we don't want any frame trimming for this
             // backtrace.
@@ -605,7 +605,7 @@ impl Globals {
                 bt.0.resolve();
 
                 // Trim boring frames at the top and bottom of the backtrace.
-                let first_symbol_to_show = if self.trim.is_some() {
+                let first_symbol_to_show = if self.trim_backtraces.is_some() {
                     if self.heap.is_some() {
                         bt.first_heap_symbol_to_show()
                     } else {
@@ -937,7 +937,7 @@ pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
     testing: bool,
     file_name: Option<PathBuf>,
-    trim: Option<usize>,
+    trim_backtraces: Option<usize>,
     save_to_memory: Option<&'m mut String>,
     eprint_json: bool,
 }
@@ -949,7 +949,7 @@ impl<'m> ProfilerBuilder<'m> {
             ad_hoc: false,
             testing: false,
             file_name: None,
-            trim: Some(10),
+            trim_backtraces: Some(10),
             save_to_memory: None,
             eprint_json: false,
         }
@@ -1022,10 +1022,10 @@ impl<'m> ProfilerBuilder<'m> {
     ///
     /// # Examples
     /// ```
-    /// let _profiler = dhat::ProfilerBuilder::new().trim(None).build();
+    /// let _profiler = dhat::ProfilerBuilder::new().trim_backtraces(None).build();
     /// ```
-    pub fn trim(mut self, max_frames: Option<usize>) -> Self {
-        self.trim = max_frames.map(|m| std::cmp::max(m, 4));
+    pub fn trim_backtraces(mut self, max_frames: Option<usize>) -> Self {
+        self.trim_backtraces = max_frames.map(|m| std::cmp::max(m, 4));
         self
     }
 
@@ -1071,7 +1071,7 @@ impl<'m> ProfilerBuilder<'m> {
                 *phase = Phase::During(Globals::new(
                     self.testing,
                     file_name,
-                    self.trim,
+                    self.trim_backtraces,
                     self.eprint_json,
                     h,
                 ));
@@ -1106,7 +1106,7 @@ macro_rules! new_backtrace {
         }
 
         // Get the backtrace.
-        new_backtrace_inner($g.trim, $g.frames_to_trim.as_ref().unwrap())
+        new_backtrace_inner($g.trim_backtraces, $g.frames_to_trim.as_ref().unwrap())
     }};
 }
 
@@ -1122,13 +1122,16 @@ macro_rules! new_backtrace {
 // `new_backtrace`. The frame for this function will be removed by top frame
 // trimming.
 #[inline(never)]
-fn new_backtrace_inner(trim: Option<usize>, frames_to_trim: &FxHashMap<usize, TB>) -> Backtrace {
+fn new_backtrace_inner(
+    trim_backtraces: Option<usize>,
+    frames_to_trim: &FxHashMap<usize, TB>,
+) -> Backtrace {
     // Get the backtrace, trimming if necessary at the top and bottom and for
     // length.
     let mut frames = Vec::new();
     backtrace::trace(|frame| {
         let ip = frame.ip() as usize;
-        if trim.is_some() {
+        if trim_backtraces.is_some() {
             match frames_to_trim.get(&ip) {
                 Some(TB::Top) => return true,     // ignore frame and continue
                 Some(TB::Bottom) => return false, // ignore frame and stop
@@ -1138,7 +1141,7 @@ fn new_backtrace_inner(trim: Option<usize>, frames_to_trim: &FxHashMap<usize, TB
 
         frames.push(frame.clone().into());
 
-        if let Some(max_frames) = trim {
+        if let Some(max_frames) = trim_backtraces {
             frames.len() < max_frames // stop if we have enough frames
         } else {
             true // continue
