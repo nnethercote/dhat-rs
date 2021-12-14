@@ -24,11 +24,9 @@ fn main() {
             .eprint_json()
             .build();
 
-        let empty_stats = dhat::AdHocStats {
-            total_events: 0,
-            total_units: 0,
-        };
-        assert_eq!(dhat::AdHocStats::get(), empty_stats);
+        let stats = dhat::AdHocStats::get();
+        assert_eq!(stats.total_events, 0);
+        assert_eq!(stats.total_units, 0);
 
         dhat::ad_hoc_event(100);
         f1();
@@ -36,11 +34,9 @@ fn main() {
         // This should have no effect, because we're ad hoc profiling.
         let _v: Vec<u8> = Vec::with_capacity(100);
 
-        let final_stats = dhat::AdHocStats {
-            total_events: 4,
-            total_units: 106,
-        };
-        assert_eq!(dhat::AdHocStats::get(), final_stats);
+        let stats = dhat::AdHocStats::get();
+        assert_eq!(stats.total_events, 4);
+        assert_eq!(stats.total_units, 106);
     }
 
     // Check basics.
@@ -138,15 +134,15 @@ fn main() {
         assert!(y("ad_hoc::f2 (dhat-rs\\tests\\ad-hoc.rs:6:0)"));
         //assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:10:0)"));
         assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:33:0)"));
-        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:34:0)"));
+        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:31:0)"));
+        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:32:0)"));
     } else {
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:5:5)"));
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:6:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:10:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:33:9)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:34:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:31:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:32:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.

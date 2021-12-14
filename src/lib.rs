@@ -1523,6 +1523,7 @@ fn trim_path(path: &Path) -> &Path {
 
 /// Stats from heap profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct HeapStats {
     /// Number of blocks (a.k.a. allocations) allocated over the entire run.
     pub total_blocks: u64,
@@ -1547,6 +1548,7 @@ pub struct HeapStats {
 
 /// Stats from ad hoc profiling.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdHocStats {
     /// Number of events recorded for the entire run.
     pub total_events: u64,

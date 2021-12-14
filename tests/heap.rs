@@ -20,15 +20,13 @@ fn main() {
             .build();
 
         // Things allocated beforehand aren't counted.
-        let empty_stats = dhat::HeapStats {
-            total_blocks: 0,
-            total_bytes: 0,
-            curr_blocks: 0,
-            curr_bytes: 0,
-            max_blocks: 0,
-            max_bytes: 0,
-        };
-        assert_eq!(dhat::HeapStats::get(), empty_stats);
+        let stats = dhat::HeapStats::get();
+        assert_eq!(stats.total_blocks, 0);
+        assert_eq!(stats.total_bytes, 0);
+        assert_eq!(stats.curr_blocks, 0);
+        assert_eq!(stats.curr_bytes, 0);
+        assert_eq!(stats.max_blocks, 0);
+        assert_eq!(stats.max_bytes, 0);
 
         // Allocated before, freed during.
         drop(v1);
@@ -53,15 +51,13 @@ fn main() {
         }
         assert_ne!(x, 0);
 
-        let final_stats = dhat::HeapStats {
-            total_blocks: 14,
-            total_bytes: 1642,
-            curr_blocks: 2,
-            curr_bytes: 432,
-            max_blocks: 3,
-            max_bytes: 1432,
-        };
-        assert_eq!(dhat::HeapStats::get(), final_stats);
+        let stats = dhat::HeapStats::get();
+        assert_eq!(stats.total_blocks, 14);
+        assert_eq!(stats.total_bytes, 1642);
+        assert_eq!(stats.curr_blocks, 2);
+        assert_eq!(stats.curr_bytes, 432);
+        assert_eq!(stats.max_blocks, 3);
+        assert_eq!(stats.max_bytes, 1432);
     }
 
     // Allocated before, freed after.
@@ -167,10 +163,10 @@ fn main() {
             assert!(y(
                 "alloc::vec::Vec<u32,alloc::alloc::Global>::reserve<u32,alloc::alloc::Global>"
             ));
-            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:37:0)")); // v3
-            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:40:0)")); // v5
-            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:41:0)")); // v6
-            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:51:0)")); // _v7
+            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:35:0)")); // v3
+            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:38:0)")); // v5
+            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:39:0)")); // v6
+            assert!(y("heap::main (dhat-rs\\tests\\heap.rs:49:0)")); // _v7
         } else {
             // Stack traces are terrible in Windows release builds.
             assert!(y("RawVec"));
@@ -178,10 +174,10 @@ fn main() {
     } else {
         assert!(y("alloc::vec::Vec<T,A>::push"));
         assert!(y("alloc::vec::Vec<T,A>::reserve"));
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:37:9)")); // v3
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:40:18)")); // v5
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:41:22)")); // v6
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:51:22)")); // _v7
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:35:9)")); // v3
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:38:18)")); // v5
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:39:22)")); // v6
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:49:22)")); // _v7
     }
 
     // This stuff should be removed by backtrace trimming.
