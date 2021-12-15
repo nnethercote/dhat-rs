@@ -245,7 +245,7 @@
 //! #[test]
 //! # */
 //! fn test1() {
-//!     let _profiler = dhat::ProfilerBuilder::new().testing().build();
+//!     let _profiler = dhat::Profiler::builder().testing().build();
 //!
 //!     let _v1 = vec![1, 2, 3, 4];
 //!     let v2 = vec![5, 6, 7, 8];
@@ -909,7 +909,7 @@ impl<'m> Profiler<'m> {
     /// let _profiler = dhat::Profiler::new_heap();
     /// ```
     pub fn new_heap() -> Self {
-        ProfilerBuilder::new().build()
+        Self::builder().build()
     }
 
     /// Initiates ad hoc profiling.
@@ -926,12 +926,26 @@ impl<'m> Profiler<'m> {
     /// let _profiler = dhat::Profiler::new_ad_hoc();
     /// ```
     pub fn new_ad_hoc() -> Self {
-        ProfilerBuilder::new().ad_hoc().build()
+        Self::builder().ad_hoc().build()
+    }
+
+    /// Creates a new `ProfilerBuilder`, which defaults to heap profiling.
+    pub fn builder() -> ProfilerBuilder<'m> {
+        ProfilerBuilder {
+            ad_hoc: false,
+            testing: false,
+            file_name: None,
+            trim_backtraces: Some(10),
+            save_to_memory: None,
+            eprint_json: false,
+        }
     }
 }
 
 /// A builder for [`Profiler`], for cases beyond the basic ones provided by
 /// [`Profiler`].
+///
+/// Created with [`Profiler::builder`].
 #[derive(Debug)]
 pub struct ProfilerBuilder<'m> {
     ad_hoc: bool,
@@ -943,23 +957,11 @@ pub struct ProfilerBuilder<'m> {
 }
 
 impl<'m> ProfilerBuilder<'m> {
-    /// Creates a new `ProfilerBuilder`, which defaults to heap profiling.
-    pub fn new() -> Self {
-        Self {
-            ad_hoc: false,
-            testing: false,
-            file_name: None,
-            trim_backtraces: Some(10),
-            save_to_memory: None,
-            eprint_json: false,
-        }
-    }
-
     /// Requests ad hoc profiling.
     ///
     /// # Examples
     /// ```
-    /// let _profiler = dhat::ProfilerBuilder::new().ad_hoc().build();
+    /// let _profiler = dhat::Profiler::builder().ad_hoc().build();
     /// ```
     pub fn ad_hoc(mut self) -> Self {
         self.ad_hoc = true;
@@ -972,7 +974,7 @@ impl<'m> ProfilerBuilder<'m> {
     ///
     /// # Examples
     /// ```
-    /// let _profiler = dhat::ProfilerBuilder::new().testing().build();
+    /// let _profiler = dhat::Profiler::builder().testing().build();
     /// ```
     pub fn testing(mut self) -> Self {
         self.testing = true;
@@ -984,7 +986,7 @@ impl<'m> ProfilerBuilder<'m> {
     /// # Examples
     /// ```
     /// let file_name = format!("heap-{}.json", std::process::id());
-    /// let _profiler = dhat::ProfilerBuilder::new().file_name(file_name).build();
+    /// let _profiler = dhat::Profiler::builder().file_name(file_name).build();
     /// # std::mem::forget(_profiler); // Don't write the file in `cargo tests`
     /// ```
     pub fn file_name<P: AsRef<Path>>(mut self, file_name: P) -> Self {
@@ -1022,7 +1024,7 @@ impl<'m> ProfilerBuilder<'m> {
     ///
     /// # Examples
     /// ```
-    /// let _profiler = dhat::ProfilerBuilder::new().trim_backtraces(None).build();
+    /// let _profiler = dhat::Profiler::builder().trim_backtraces(None).build();
     /// ```
     pub fn trim_backtraces(mut self, max_frames: Option<usize>) -> Self {
         self.trim_backtraces = max_frames.map(|m| std::cmp::max(m, 4));
@@ -1083,12 +1085,6 @@ impl<'m> ProfilerBuilder<'m> {
         Profiler {
             save_to_memory: self.save_to_memory,
         }
-    }
-}
-
-impl Default for ProfilerBuilder<'_> {
-    fn default() -> Self {
-        ProfilerBuilder::new()
     }
 }
 

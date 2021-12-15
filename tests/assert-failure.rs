@@ -3,7 +3,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[test]
 fn main() {
-    let _profiler = dhat::ProfilerBuilder::new().testing().eprint_json().build();
+    let _profiler = dhat::Profiler::builder().testing().eprint_json().build();
 
     let _v1 = vec![1, 2, 3, 4];
     let _v2 = vec![5, 6, 7, 8];
