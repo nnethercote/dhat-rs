@@ -564,7 +564,7 @@ impl Globals {
 
     // Finish tracking allocations and deallocations, print a summary message
     // to `stderr` and save the profile to file/memory if requested.
-    fn finish(mut self, save_to_memory: &mut Option<&mut String>) {
+    fn finish(mut self, memory_output: Option<&mut String>) {
         let now = Instant::now();
 
         if self.heap.is_some() {
@@ -692,10 +692,10 @@ impl Globals {
             );
         }
 
-        if let Some(mem) = save_to_memory {
+        if let Some(memory_output) = memory_output {
             // Default pretty printing is fine here, it's only used for small
             // tests.
-            **mem = serde_json::to_string_pretty(&json).unwrap();
+            *memory_output = serde_json::to_string_pretty(&json).unwrap();
             eprintln!("dhat: The data has been saved to the memory buffer");
         } else {
             let write = || -> std::io::Result<()> {
@@ -883,18 +883,13 @@ impl Drop for IgnoreAllocs {
 /// file, depending on how the `Profiler` has been configured. Only one
 /// instance of this type can be created.
 //
-// Much of the actual profiler state is stored in `Globals`, so it can be
-// accessed from places like `Alloc::alloc` and `ad_hoc_event()`without the
-// `Profiler` instance being within reach.
+// The actual profiler state is stored in `Globals`, so it can be accessed from
+// places like `Alloc::alloc` and `ad_hoc_event()` when the `Profiler`
+// instance isn't within reach.
 #[derive(Debug)]
-pub struct Profiler<'m> {
-    // Memory buffer to send output to on drop, if requested. Stored here
-    // rather than in `Globals` because `Globals` can't hold a non-static
-    // reference.
-    save_to_memory: Option<&'m mut String>,
-}
+pub struct Profiler {}
 
-impl<'m> Profiler<'m> {
+impl Profiler {
     /// Initiates allocation profiling.
     ///
     /// Typically the first thing in `main`. Its result should be assigned to a
@@ -930,13 +925,12 @@ impl<'m> Profiler<'m> {
     }
 
     /// Creates a new `ProfilerBuilder`, which defaults to heap profiling.
-    pub fn builder() -> ProfilerBuilder<'m> {
+    pub fn builder() -> ProfilerBuilder {
         ProfilerBuilder {
             ad_hoc: false,
             testing: false,
             file_name: None,
             trim_backtraces: Some(10),
-            save_to_memory: None,
             eprint_json: false,
         }
     }
@@ -947,16 +941,15 @@ impl<'m> Profiler<'m> {
 ///
 /// Created with [`Profiler::builder`].
 #[derive(Debug)]
-pub struct ProfilerBuilder<'m> {
+pub struct ProfilerBuilder {
     ad_hoc: bool,
     testing: bool,
     file_name: Option<PathBuf>,
     trim_backtraces: Option<usize>,
-    save_to_memory: Option<&'m mut String>,
     eprint_json: bool,
 }
 
-impl<'m> ProfilerBuilder<'m> {
+impl ProfilerBuilder {
     /// Requests ad hoc profiling.
     ///
     /// # Examples
@@ -1031,13 +1024,6 @@ impl<'m> ProfilerBuilder<'m> {
         self
     }
 
-    // For testing purposes only.
-    #[doc(hidden)]
-    pub fn save_to_memory(mut self, mem: &'m mut String) -> Self {
-        self.save_to_memory = Some(mem);
-        self
-    }
-
     // For testing purposes only. Useful for seeing what went wrong if a test
     // fails on CI.
     #[doc(hidden)]
@@ -1051,7 +1037,7 @@ impl<'m> ProfilerBuilder<'m> {
     /// # Panics
     ///
     /// Panics if a [`Profiler`] has been created previously.
-    pub fn build(self) -> Profiler<'m> {
+    pub fn build(self) -> Profiler {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
@@ -1082,9 +1068,7 @@ impl<'m> ProfilerBuilder<'m> {
                 panic!("dhat: profiling started a second time")
             }
         }
-        Profiler {
-            save_to_memory: self.save_to_memory,
-        }
+        Profiler {}
     }
 }
 
@@ -1272,8 +1256,8 @@ pub fn ad_hoc_event(weight: usize) {
     }
 }
 
-impl<'m> Drop for Profiler<'m> {
-    fn drop(&mut self) {
+impl Profiler {
+    fn drop_inner(&mut self, memory_output: Option<&mut String>) {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
@@ -1282,12 +1266,26 @@ impl<'m> Drop for Profiler<'m> {
             Phase::Pre => unreachable!(),
             Phase::During(g) => {
                 if !g.testing {
-                    g.finish(&mut self.save_to_memory)
+                    g.finish(memory_output)
                 }
             }
             Phase::PostAssert => {}
             Phase::PostDrop => unreachable!(),
         }
+    }
+
+    // For testing purposes only.
+    #[doc(hidden)]
+    pub fn drop_and_get_memory_output(&mut self) -> String {
+        let mut memory_output = String::new();
+        self.drop_inner(Some(&mut memory_output));
+        memory_output
+    }
+}
+
+impl Drop for Profiler {
+    fn drop(&mut self) {
+        self.drop_inner(None);
     }
 }
 
@@ -1635,7 +1633,7 @@ where
     match std::mem::replace(phase, Phase::PostAssert) {
         Phase::Pre => unreachable!(),
         Phase::During(g) => {
-            g.finish(&mut None);
+            g.finish(None);
             true
         }
         Phase::PostAssert => unreachable!(),
