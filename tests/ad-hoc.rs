@@ -16,11 +16,13 @@ fn main() {
     use serde_json::Value::{self, *};
 
     let mem = {
-        let mut profiler = std::mem::ManuallyDrop::new(dhat::Profiler::builder()
-            .ad_hoc()
-            .trim_backtraces(Some(usize::MAX))
-            .eprint_json()
-            .build());
+        let mut profiler = std::mem::ManuallyDrop::new(
+            dhat::Profiler::builder()
+                .ad_hoc()
+                .trim_backtraces(Some(usize::MAX))
+                .eprint_json()
+                .build(),
+        );
 
         let stats = dhat::AdHocStats::get();
         assert_eq!(stats.total_events, 0);
@@ -134,15 +136,15 @@ fn main() {
         assert!(y("ad_hoc::f2 (dhat-rs\\tests\\ad-hoc.rs:6:0)"));
         //assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:10:0)"));
         assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:29:0)"));
-        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:30:0)"));
+        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:31:0)"));
+        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:32:0)"));
     } else {
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:5:5)"));
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:6:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:10:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:29:9)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:30:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:31:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:32:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
