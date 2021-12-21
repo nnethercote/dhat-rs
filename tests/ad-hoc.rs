@@ -15,6 +15,9 @@ fn f1() {
 fn main() {
     use serde_json::Value::{self, *};
 
+    // Ignored because profiling hasn't started yet.
+    dhat::ad_hoc_event(3);
+
     let mem = {
         let mut profiler = std::mem::ManuallyDrop::new(
             dhat::Profiler::builder()
@@ -40,6 +43,9 @@ fn main() {
 
         profiler.drop_and_get_memory_output()
     };
+
+    // Ignored because profiling has finished.
+    dhat::ad_hoc_event(5);
 
     // Check basics.
     let mut v: Value = serde_json::from_str(&mem).unwrap();
@@ -136,15 +142,15 @@ fn main() {
         assert!(y("ad_hoc::f2 (dhat-rs\\tests\\ad-hoc.rs:6:0)"));
         //assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:10:0)"));
         assert!(y("ad_hoc::f1 (dhat-rs\\tests\\ad-hoc.rs:11:0)"));
-        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:31:0)"));
-        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:32:0)"));
+        assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:34:0)"));
+        //assert!(y("ad_hoc::main (dhat-rs\\tests\\ad-hoc.rs:35:0)"));
     } else {
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:5:5)"));
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:6:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:10:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:31:9)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:32:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:34:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:35:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
