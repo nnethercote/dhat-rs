@@ -44,10 +44,15 @@
 //! # Configuration (profiling and testing)
 //!
 //! In your `Cargo.toml` file, as well as specifying `dhat` as a dependency,
-//! you should enable source line debug info:
+//! you should (a) enable source line debug info, and (b) create a feature or
+//! two that lets you easily switch profiling on and off:
 //! ```toml
 //! [profile.release]
 //! debug = 1
+//!
+//! [features]
+//! dhat-heap = []    # if you are doing heap profiling
+//! dhat-ad-hoc = []  # if you are doing ad hoc profiling
 //! ```
 //! You should only use `dhat` in release builds. Debug builds are too slow to
 //! be useful.
@@ -57,15 +62,28 @@
 //! For heap profiling, enable the global allocator by adding this code to your
 //! program:
 //! ```
+//! # // Tricky: comment out the `cfg` so it shows up in docs but the following
+//! # // line is still tsted by `cargo test`.
+//! # /*
+//! #[cfg(feature = "dhat-heap")]
+//! # */
 //! #[global_allocator]
 //! static ALLOC: dhat::Alloc = dhat::Alloc;
 //! ```
 //! Then add the following code to the very start of your `main` function:
 //! ```
+//! # // Tricky: comment out the `cfg` so it shows up in docs but the following
+//! # // line is still tsted by `cargo test`.
+//! # /*
+//! #[cfg(feature = "dhat-heap")]
+//! # */
 //! let _profiler = dhat::Profiler::new_heap();
 //! ```
-//! Profiling will occur during the lifetime of the [`Profiler`] instance.
-//!
+//! Then run this command to enable heap profiling during the lifetime of the
+//! [`Profiler`] instance:
+//! ```text
+//! cargo run --features dhat-heap
+//! ```
 //! [`dhat::Alloc`](Alloc) is slower than the normal allocator, so it should
 //! only be enabled while profiling.
 //!
@@ -79,11 +97,26 @@
 //! To do this, add the following code to the very start of your `main`
 //! function:
 //!```
+//! # // Tricky: comment out the `cfg` so it shows up in docs but the following
+//! # // line is still tsted by `cargo test`.
+//! # /*
+//! #[cfg(feature = "dhat-ad-hoc")]
+//! # */
 //! let _profiler = dhat::Profiler::new_ad_hoc();
 //! ```
 //! Then insert calls like this at points of interest:
 //! ```
+//! # // Tricky: comment out the `cfg` so it shows up in docs but the following
+//! # // line is still tsted by `cargo test`.
+//! # /*
+//! #[cfg(feature = "dhat-ad-hoc")]
+//! # */
 //! dhat::ad_hoc_event(100);
+//! ```
+//! Then run this command to enable ad hoc profiling during the lifetime of the
+//! [`Profiler`] instance:
+//! ```text
+//! cargo run --features dhat-ad-hoc
 //! ```
 //! For example, imagine you have a hot function that is called from many call
 //! sites. You might want to know how often it is called and which other
@@ -239,8 +272,8 @@
 //! #[global_allocator]
 //! static ALLOC: dhat::Alloc = dhat::Alloc;
 //!
-//! # // Trickiness: `#[test]` is needed in a test, but messes things up here.
-//! # // So we comment it out in a way that will make it show up in the docs.
+//! # // Tricky: comment out the `#[test]` because it's needed in an actual
+//! # // test but messes up things here.
 //! # /*
 //! #[test]
 //! # */
