@@ -1,9 +1,10 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::missing_doc_code_examples)]
 
-//! This crate provides heap profiling and ad hoc profiling capabilities to
+//! This crate provides heap profiling and [ad hoc profiling] capabilities to
 //! Rust programs, similar to those provided by [DHAT].
 //!
+//! [ad hoc profiling]: https://github.com/nnethercote/counts/#ad-hoc-profiling
 //! [DHAT]: https://www.valgrind.org/docs/manual/dh-manual.html
 //!
 //! The heap profiling works by using a global allocator that wraps the system
@@ -186,7 +187,7 @@
 //! - Easier: Use the [online version].
 //! - Harder: Clone the [Valgrind repository] with `git clone
 //!   git://sourceware.org/git/valgrind.git` and open `dhat/dh_view.html`.
-//!   (There is no need to build any code in this repository.)
+//!   There is no need to build any code in this repository.
 //!
 //! [online version]: https://nnethercote.github.io/dh_view/dh_view.html
 //! [Valgrind repository]: https://www.valgrind.org/downloads/repository.html
@@ -238,7 +239,7 @@
 //! - Only one allocation-related frame will be shown at the top of the
 //!   backtrace. That frame may be a function within `alloc::alloc`, a function
 //!   within this crate, or a global allocation function like `__rg_alloc`.
-//! - Common frames at the bottom of backtraces, below `main`, are omitted.
+//! - Common frames at the bottom of all backtraces, below `main`, are omitted.
 //!
 //! Backtrace trimming is inexact and if the above heuristics fail more frames
 //! will be shown. [`ProfilerBuilder::trim_backtraces`] allows (approximate)
@@ -253,21 +254,40 @@
 //! finishing") and sometimes it is less precise (e.g. "the peak heap usage of
 //! this code should be less than 10 MiB").
 //!
-//! Each such test needs to be in a separate integration test in your crate's
-//! `tests/` directory. (It cannot be within a unit test, and there cannot be
-//! more than one heap usage test per integration test, because heap profiling
-//! involves global state and multiple tests within the same process will
-//! interfere with each other.)
+//! These tests are somewhat fragile, because heap profiling involves global
+//! state (allocation stats), which introduces complications.
+//! - `dhat` will panic if more than one `Profiler` is running at a time, but
+//!   Rust tests run in parallel by default. So parallel running of heap usage
+//!   tests must be prevented.
+//! - If you use something like the
+//!   [`serial_test`](https://docs.rs/serial_test/) crate to run heap usage
+//!   tests in serial, Rust's test runner code by default still runs in
+//!   parallel with those tests, and it allocates memory. These allocations
+//!   will be counted by the `Profiler` as if they are part of the test, which
+//!   will likely cause test failures.
 //!
-//! Integration tests can only be used to test items from libraries, not
-//! binaries. If you want to do heap usage testing of items from a binary, the
-//! best approach is probably to restructure things so that most of the
-//! functionality is in a library, and the binary is a thin wrapper around the
-//! library.
+//! Therefore, the best approach is to put each heap usage test in its own
+//! integration test file. Each integration test runs in its own process, and
+//! so cannot interfere with any other test. Also, if there is only one test in
+//! an integration test file, Rust's test runner code does not use any
+//! parallelism, and so will not interfere with the test. If you do this, a
+//! simple `cargo test` will work as expected.
 //!
-//! Configuration of `Cargo.toml` is much the same as for the profiling use case.
+//! But integration tests have some limits. For example, they only be used to
+//! test items from libraries, not binaries. One way to get around this is to
+//! restructure things so that most of the functionality is in a library, and
+//! the binary is a thin wrapper around the library.
 //!
-//! Here is an example showing what is possible:
+//! Failing that, a blunt fallback is to run `cargo tests -- --test-threads=1`.
+//! This disables all parallelism in tests, avoiding all the problems. This
+//! allows the use of unit tests and multiples tests per integration test file,
+//! at the cost of a non-standard invocation and slower test execution.
+//!
+//! With all that in mind, configuration of `Cargo.toml` is much the same as
+//! for the profiling use case.
+//!
+//! Here is an example showing what is possible. This code would go in an
+//! integration test within a crate's `tests/` directory:
 //! ```
 //! #[global_allocator]
 //! static ALLOC: dhat::Alloc = dhat::Alloc;
@@ -277,7 +297,7 @@
 //! # /*
 //! #[test]
 //! # */
-//! fn test1() {
+//! fn test() {
 //!     let _profiler = dhat::Profiler::builder().testing().build();
 //!
 //!     let _v1 = vec![1, 2, 3, 4];
@@ -300,7 +320,7 @@
 //!     dhat::assert_eq!(stats.curr_blocks, 1);
 //!     dhat::assert_eq!(stats.curr_bytes, 16);
 //! }
-//! # test1()
+//! # test()
 //! ```
 //! The [`testing`](ProfilerBuilder::testing) call puts the profiler into
 //! testing mode, which allows the stats provided by [`HeapStats::get`] to be
@@ -308,7 +328,7 @@
 //! assertions work much the same as normal assertions, except that if any of
 //! them fail a heap profile will be saved.
 //!
-//! When viewing the heap profile after a failure, the best choice of sort
+//! When viewing the heap profile after a test failure, the best choice of sort
 //! metric in the viewer will depend on which stat was involved in the
 //! assertion failure.
 //! - `total_blocks`: "Total (blocks)"
@@ -328,8 +348,9 @@
 //! Ad hoc usage testing is also possible. It can be used to ensure certain
 //! code points in your program are hit a particular number of times during
 //! execution. It works in much the same way as heap usage testing, but
-//! [`ProfilerBuilder::ad_hoc`] must be specified, and [`AdHocStats::get`] is
-//! used instead of [`HeapStats::get`].
+//! [`ProfilerBuilder::ad_hoc`] must be specified, [`AdHocStats::get`] is
+//! used instead of [`HeapStats::get`], and there is no possibility of Rust's
+//! test runner code interfering with the tests.
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
@@ -346,29 +367,37 @@ use std::time::{Duration, Instant};
 use thousands::Separable;
 
 lazy_static! {
-    static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Pre);
+    static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Ready);
 }
 
-// Likely state transitions:
-// - Pre                                     (profiling never started)
-// - Pre -> During -> PostDrop               (normal profiling)
-// - Pre -> During -> PostAssert -> PostDrop (assertion failure)
+// State transition diagram:
 //
-// The use of `std::process::exit` or `std::mem::forget` (on the `Profiler`)
-// can prevent transitions to the `PostDrop` state.
+// +---------------> Ready
+// |                   |
+// | Profiler::        | ProfilerBuilder::
+// | drop_inner()      | build()
+// |                   v
+// +---------------- Running
+// |                   |
+// |                   | check_assert_condition()
+// |                   | [if the check fails]
+// |                   v
+// +---------------- PostAssert
+//
+// Note: the use of `std::process::exit` or `std::mem::forget` (on the
+// `Profiler`) can result in termination while the profiler is still running,
+// i.e. it won't produce output.
 #[derive(PartialEq)]
 enum Phase<T> {
-    // Before the `Profiler` has started.
-    Pre,
+    // We are ready to start running a `Profiler`.
+    Ready,
 
-    // While the `Profiler` is running.
-    During(T),
+    // A `Profiler` is running.
+    Running(T),
 
-    // After the `Profiler` has stopped (due to as assertion failure).
+    // The current `Profiler` has stopped due to as assertion failure, but
+    // hasn't been dropped yet.
     PostAssert,
-
-    // After the `Profiler` has stopped (due to being dropped).
-    PostDrop,
 }
 
 // Type used in frame trimming.
@@ -914,13 +943,13 @@ impl Drop for IgnoreAllocs {
 /// stops when (a) this value is dropped or (b) a `dhat` assertion fails,
 /// whichever comes first. When that happens, profiling data may be written to
 /// file, depending on how the `Profiler` has been configured. Only one
-/// instance of this type can be created.
+/// `Profiler` can be running at any point in time.
 //
 // The actual profiler state is stored in `Globals`, so it can be accessed from
 // places like `Alloc::alloc` and `ad_hoc_event()` when the `Profiler`
 // instance isn't within reach.
 #[derive(Debug)]
-pub struct Profiler {}
+pub struct Profiler;
 
 impl Profiler {
     /// Initiates allocation profiling.
@@ -930,7 +959,7 @@ impl Profiler {
     ///
     /// # Panics
     ///
-    /// Panics if a `Profiler` has been created previously.
+    /// Panics if another `Profiler` is running.
     ///
     /// # Examples
     /// ```
@@ -947,7 +976,7 @@ impl Profiler {
     ///
     /// # Panics
     ///
-    /// Panics if a `Profiler` has been created previously.
+    /// Panics if another `Profiler` is running.
     ///
     /// # Examples
     /// ```
@@ -957,7 +986,7 @@ impl Profiler {
         Self::builder().ad_hoc().build()
     }
 
-    /// Creates a new `ProfilerBuilder`, which defaults to heap profiling.
+    /// Creates a new [`ProfilerBuilder`], which defaults to heap profiling.
     pub fn builder() -> ProfilerBuilder {
         ProfilerBuilder {
             ad_hoc: false,
@@ -1020,11 +1049,11 @@ impl ProfilerBuilder {
         self
     }
 
-    /// Requests backtrace trimming of a particular kind.
+    /// Sets how backtrace trimming is performed.
     ///
-    /// `dhat` can trim uninteresting frames from the top and bottom of
-    /// backtraces, which makes the output easier to read. It can also limit
-    /// the number of frames, which improves performance.
+    /// `dhat` can use heuristics to trim uninteresting frames from the top and
+    /// bottom of backtraces, which makes the output easier to read. It can
+    /// also limit the number of frames, which improves performance.
     ///
     /// The argument can be specified in several ways.
     /// - `None`: no backtrace trimming will be performed, and there is no
@@ -1069,14 +1098,14 @@ impl ProfilerBuilder {
     ///
     /// # Panics
     ///
-    /// Panics if a [`Profiler`] has been created previously.
+    /// Panics if another [`Profiler`] is running.
     pub fn build(self) -> Profiler {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
         let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
         match phase {
-            Phase::Pre => {
+            Phase::Ready => {
                 let file_name = if let Some(file_name) = self.file_name {
                     file_name
                 } else if !self.ad_hoc {
@@ -1089,7 +1118,7 @@ impl ProfilerBuilder {
                 } else {
                     None
                 };
-                *phase = Phase::During(Globals::new(
+                *phase = Phase::Running(Globals::new(
                     self.testing,
                     file_name,
                     self.trim_backtraces,
@@ -1097,11 +1126,11 @@ impl ProfilerBuilder {
                     h,
                 ));
             }
-            Phase::During(_) | Phase::PostAssert | Phase::PostDrop => {
-                panic!("dhat: profiling started a second time")
+            Phase::Running(_) | Phase::PostAssert => {
+                panic!("dhat: creating a profiler while a profiler is already running")
             }
         }
-        Profiler {}
+        Profiler
     }
 }
 
@@ -1183,7 +1212,7 @@ unsafe impl GlobalAlloc for Alloc {
                 return ptr;
             }
 
-            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+            if let Phase::Running(g @ Globals { heap: Some(_), .. }) = phase {
                 let size = layout.size();
                 let bt = new_backtrace!(g);
                 let pp_info_idx = g.get_pp_info(bt, PpInfo::new_heap);
@@ -1207,7 +1236,7 @@ unsafe impl GlobalAlloc for Alloc {
                 return new_ptr;
             }
 
-            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+            if let Phase::Running(g @ Globals { heap: Some(_), .. }) = phase {
                 let old_size = layout.size();
                 let delta = Delta::new(old_size, new_size);
 
@@ -1246,7 +1275,7 @@ unsafe impl GlobalAlloc for Alloc {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
             System.dealloc(ptr, layout);
 
-            if let Phase::During(g @ Globals { heap: Some(_), .. }) = phase {
+            if let Phase::Running(g @ Globals { heap: Some(_), .. }) = phase {
                 let size = layout.size();
 
                 // Remove the record of the live block and get the
@@ -1280,7 +1309,7 @@ pub fn ad_hoc_event(weight: usize) {
     std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
     let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-    if let Phase::During(g @ Globals { heap: None, .. }) = phase {
+    if let Phase::Running(g @ Globals { heap: None, .. }) = phase {
         let bt = new_backtrace!(g);
         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
 
@@ -1295,15 +1324,14 @@ impl Profiler {
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
         let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-        match std::mem::replace(phase, Phase::PostDrop) {
-            Phase::Pre => unreachable!(),
-            Phase::During(g) => {
+        match std::mem::replace(phase, Phase::Ready) {
+            Phase::Ready => unreachable!(),
+            Phase::Running(g) => {
                 if !g.testing {
                     g.finish(memory_output)
                 }
             }
             Phase::PostAssert => {}
-            Phase::PostDrop => unreachable!(),
         }
     }
 
@@ -1600,12 +1628,12 @@ impl HeapStats {
 
         let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
         match phase {
-            Phase::Pre => {
-                panic!("dhat: getting heap stats before the profiler has started")
+            Phase::Ready => {
+                panic!("dhat: getting heap stats when no profiler is running")
             }
-            Phase::During(g) => g.get_heap_stats(),
-            Phase::PostAssert | Phase::PostDrop => {
-                panic!("dhat: getting heap stats after the profiler has stopped")
+            Phase::Running(g) => g.get_heap_stats(),
+            Phase::PostAssert => {
+                panic!("dhat: getting heap stats after the profiler has asserted")
             }
         }
     }
@@ -1624,18 +1652,19 @@ impl AdHocStats {
 
         let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
         match phase {
-            Phase::Pre => {
-                panic!("dhat: getting ad hoc stats before the profiler has started")
+            Phase::Ready => {
+                panic!("dhat: getting ad hoc stats when no profiler is running")
             }
-            Phase::During(g) => g.get_ad_hoc_stats(),
-            Phase::PostAssert | Phase::PostDrop => {
-                panic!("dhat: getting ad hoc stats after the profiler has stopped")
+            Phase::Running(g) => g.get_ad_hoc_stats(),
+            Phase::PostAssert => {
+                panic!("dhat: getting ad hoc stats after the profiler has asserted")
             }
         }
     }
 }
 
 // Just an implementation detail of the assert macros.
+// njn: invert sense of the return value?
 #[doc(hidden)]
 pub fn check_assert_condition<F>(cond: F) -> bool
 where
@@ -1649,8 +1678,8 @@ where
 
     let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
     match phase {
-        Phase::Pre => panic!("dhat: asserting before the profiler has started"),
-        Phase::During(g) => {
+        Phase::Ready => panic!("dhat: asserting when no profiler is running"),
+        Phase::Running(g) => {
             if !g.testing {
                 panic!("dhat: asserting while not in testing mode");
             }
@@ -1659,18 +1688,16 @@ where
             }
         }
         Phase::PostAssert => panic!("dhat: asserting after the profiler has asserted"),
-        Phase::PostDrop => panic!("dhat: asserting after the profiler has stopped"),
     }
 
     // Failure.
     match std::mem::replace(phase, Phase::PostAssert) {
-        Phase::Pre => unreachable!(),
-        Phase::During(g) => {
+        Phase::Ready => unreachable!(),
+        Phase::Running(g) => {
             g.finish(None);
             true
         }
         Phase::PostAssert => unreachable!(),
-        Phase::PostDrop => unreachable!(),
     }
 }
 
@@ -1684,8 +1711,8 @@ where
 /// Panics immediately (without saving the profile data) in the following
 /// circumstances.
 /// - If called when a [`Profiler`] is not running or is not in testing mode.
-/// - If called after a previous `dhat` assertion has failed. This is possible
-///   if [`std::panic::catch_unwind`] is used.
+/// - If called after a previous `dhat` assertion has failed with the current
+///   [`Profiler`]. This is possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert {
     ($cond:expr) => ({
@@ -1710,8 +1737,8 @@ macro_rules! assert {
 /// Panics immediately (without saving the profile data) in the following
 /// circumstances.
 /// - If called when a [`Profiler`] is not running or is not in testing mode.
-/// - If called after a previous `dhat` assertion has failed. This is possible
-///   if [`std::panic::catch_unwind`] is used.
+/// - If called after a previous `dhat` assertion has failed with the current
+///   [`Profiler`]. This is possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert_eq {
     ($left:expr, $right:expr $(,)?) => ({
@@ -1742,8 +1769,8 @@ macro_rules! assert_eq {
 /// Panics immediately (without saving the profile data) in the following
 /// circumstances.
 /// - If called when a [`Profiler`] is not running or is not in testing mode.
-/// - If called after a previous `dhat` assertion has failed. This is possible
-///   if [`std::panic::catch_unwind`] is used.
+/// - If called after a previous `dhat` assertion has failed with the current
+///   [`Profiler`]. This is possible if [`std::panic::catch_unwind`] is used.
 #[macro_export]
 macro_rules! assert_ne {
     ($left:expr, $right:expr) => ({

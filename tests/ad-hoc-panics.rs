@@ -5,12 +5,12 @@
 fn main() {
     dhat::assert_is_panic(
         || dhat::AdHocStats::get(),
-        "dhat: getting ad hoc stats before the profiler has started",
+        "dhat: getting ad hoc stats when no profiler is running",
     );
 
     dhat::assert_is_panic(
         || dhat::assert!(true),
-        "dhat: asserting before the profiler has started",
+        "dhat: asserting when no profiler is running",
     );
 
     {
@@ -18,7 +18,7 @@ fn main() {
 
         dhat::assert_is_panic(
             || dhat::Profiler::new_ad_hoc(),
-            "dhat: profiling started a second time",
+            "dhat: creating a profiler while a profiler is already running",
         );
 
         dhat::assert_is_panic(
@@ -34,11 +34,11 @@ fn main() {
 
     dhat::assert_is_panic(
         || dhat::AdHocStats::get(),
-        "dhat: getting ad hoc stats after the profiler has stopped",
+        "dhat: getting ad hoc stats when no profiler is running",
     );
 
     dhat::assert_is_panic(
         || dhat::assert!(true),
-        "dhat: asserting after the profiler has stopped",
+        "dhat: asserting when no profiler is running",
     );
 }

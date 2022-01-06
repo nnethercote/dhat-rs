@@ -159,4 +159,7 @@ fn main() {
     assert!(n("call_once::"));
     assert!(n("catch_unwind::"));
     assert!(n("panic"));
+
+    // A trivial second profiler in the same run, albeit a heap profiler.
+    let _profiler = dhat::Profiler::new_heap();
 }

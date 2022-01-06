@@ -3,7 +3,7 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 #[test]
 fn main() {
-    let _profiler = dhat::Profiler::builder().testing().eprint_json().build();
+    let profiler = dhat::Profiler::builder().testing().eprint_json().build();
 
     let _v1 = vec![1, 2, 3, 4];
     let _v2 = vec![5, 6, 7, 8];
@@ -21,4 +21,11 @@ fn main() {
         || dhat::assert!(stats.curr_bytes == 32, "extra {} {}", 1, "2"),
         "dhat: asserting after the profiler has asserted",
     );
+
+    drop(profiler);
+
+    let _profiler = dhat::Profiler::builder().testing().eprint_json().build();
+
+    // Normal assert on a second profiler.
+    dhat::assert_is_panic(|| dhat::assert!(false), "dhat: assertion failed: false");
 }
