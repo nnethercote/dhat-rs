@@ -1,5 +1,6 @@
 #![deny(missing_docs)]
 #![deny(rustdoc::missing_doc_code_examples)]
+#![deny(missing_debug_implementations)]
 
 //! This crate provides heap profiling and [ad hoc profiling] capabilities to
 //! Rust programs, similar to those provided by [DHAT].
