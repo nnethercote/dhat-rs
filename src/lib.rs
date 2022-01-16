@@ -274,6 +274,12 @@
 //! parallelism, and so will not interfere with the test. If you do this, a
 //! simple `cargo test` will work as expected.
 //!
+//! Alternatively, if you really want multiple heap usage tests in a single
+//! integration test file you can write your own [custom test harness], which
+//! is simpler than it sounds.
+//!
+//! [custom test harness]: https://www.infinyon.com/blog/2021/04/rust-custom-test-harness/
+//!
 //! But integration tests have some limits. For example, they only be used to
 //! test items from libraries, not binaries. One way to get around this is to
 //! restructure things so that most of the functionality is in a library, and
@@ -342,7 +348,9 @@
 //! Note: if you try this example test it may work in a debug build but fail in
 //! a release build. This is because the compiler may optimize away some of the
 //! allocations that are unused. This is a common problem for contrived
-//! examples but less common for real tests.
+//! examples but less common for real tests. The unstable
+//! [`std::hint::black_box`](std::hint::black_box) function may also be helpful
+//! in this situation.
 //!
 //! # Ad hoc usage testing
 //!
