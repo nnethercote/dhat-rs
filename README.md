@@ -5,6 +5,14 @@ programs, similar to those provided by [DHAT].
 
 [DHAT]: https://www.valgrind.org/docs/manual/dh-manual.html
 
+It also provides heap usage testing capabilities, which let you write tests
+that check things like:
+- "This code should do exactly 96 heap allocations".
+- "The peak heap usage of this code should be less than 10 MiB".
+- "This code should free all heap allocations before finishing".
+
+It provides helpful details if these fail.
+
 See the [crate documentation] for details on how to use it.
 
 [crate documentation]: https://docs.rs/dhat
