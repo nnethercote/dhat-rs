@@ -1952,10 +1952,10 @@ pub fn assert_is_panic<R, F: FnOnce() -> R + std::panic::UnwindSafe>(f: F, expec
         } else if let Some(actual) = err.downcast_ref::<String>() {
             std::assert_eq!(expected, actual);
         } else {
-            panic!("match_panic: Not a string: {:?}", err);
+            panic!("assert_is_panic: Not a string: {:?}", err);
         }
     } else {
-        panic!("match_panic: Not an error");
+        panic!("assert_is_panic: Not an error");
     }
 }
 
