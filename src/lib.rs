@@ -363,7 +363,7 @@
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
-use parking_lot::Mutex;
+use std::sync::Mutex;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
@@ -1112,7 +1112,7 @@ impl ProfilerBuilder {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
         match phase {
             Phase::Ready => {
                 let file_name = if let Some(file_name) = self.file_name {
@@ -1215,7 +1215,7 @@ unsafe impl GlobalAlloc for Alloc {
         if ignore_allocs.was_already_ignoring_allocs {
             System.alloc(layout)
         } else {
-            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
             let ptr = System.alloc(layout);
             if ptr.is_null() {
                 return ptr;
@@ -1239,7 +1239,7 @@ unsafe impl GlobalAlloc for Alloc {
         if ignore_allocs.was_already_ignoring_allocs {
             System.realloc(old_ptr, layout, new_size)
         } else {
-            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
             let new_ptr = System.realloc(old_ptr, layout, new_size);
             if new_ptr.is_null() {
                 return new_ptr;
@@ -1281,7 +1281,7 @@ unsafe impl GlobalAlloc for Alloc {
         if ignore_allocs.was_already_ignoring_allocs {
             System.dealloc(ptr, layout)
         } else {
-            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+            let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
             System.dealloc(ptr, layout);
 
             if let Phase::Running(g @ Globals { heap: Some(_), .. }) = phase {
@@ -1317,7 +1317,7 @@ pub fn ad_hoc_event(weight: usize) {
     let ignore_allocs = IgnoreAllocs::new();
     std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
     if let Phase::Running(g @ Globals { heap: None, .. }) = phase {
         let bt = new_backtrace!(g);
         let pp_info_idx = g.get_pp_info(bt, PpInfo::new_ad_hoc);
@@ -1332,7 +1332,7 @@ impl Profiler {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
         match std::mem::replace(phase, Phase::Ready) {
             Phase::Ready => unreachable!(),
             Phase::Running(g) => {
@@ -1635,7 +1635,7 @@ impl HeapStats {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
         match phase {
             Phase::Ready => {
                 panic!("dhat: getting heap stats when no profiler is running")
@@ -1659,7 +1659,7 @@ impl AdHocStats {
         let ignore_allocs = IgnoreAllocs::new();
         std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+        let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
         match phase {
             Phase::Ready => {
                 panic!("dhat: getting ad hoc stats when no profiler is running")
@@ -1685,7 +1685,7 @@ where
     let ignore_allocs = IgnoreAllocs::new();
     std::assert!(!ignore_allocs.was_already_ignoring_allocs);
 
-    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
+    let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock().unwrap();
     match phase {
         Phase::Ready => panic!("dhat: asserting when no profiler is running"),
         Phase::Running(g) => {
