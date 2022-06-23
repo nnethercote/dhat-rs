@@ -1498,8 +1498,7 @@ impl Backtrace {
             .0
             .frames()
             .iter()
-            .map(|f| f.symbols().iter())
-            .flatten()
+            .flat_map(|f| f.symbols().iter())
             .collect();
 
         for (i, symbol) in symbols.iter().enumerate().rev() {
