@@ -375,6 +375,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
+// At some point I should set the MSRV to 1.63, whereupon this lazy_static can
+// be removed because `Mutex::new` is now `const`.
 lazy_static! {
     static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Ready);
 }
