@@ -370,6 +370,7 @@ use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::fs::File;
 use std::hash::{Hash, Hasher};
+use std::io::BufWriter;
 use std::ops::AddAssign;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -772,7 +773,7 @@ impl Globals {
             eprintln!("dhat: The data has been saved to the memory buffer");
         } else {
             let write = || -> std::io::Result<()> {
-                let file = File::create(&self.file_name)?;
+                let buffered_file = BufWriter::new(File::create(&self.file_name)?);
                 // `to_writer` produces JSON that is compact.
                 // `to_writer_pretty` produces JSON that is readable. This code
                 // gives us JSON that is fairly compact and fairly readable.
@@ -781,7 +782,7 @@ impl Globals {
                 // on a single line, but this is as good as we can easily
                 // achieve.
                 let formatter = serde_json::ser::PrettyFormatter::with_indent(b"");
-                let mut ser = serde_json::Serializer::with_formatter(&file, formatter);
+                let mut ser = serde_json::Serializer::with_formatter(buffered_file, formatter);
                 json.serialize(&mut ser)?;
                 Ok(())
             };
