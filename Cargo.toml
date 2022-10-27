@@ -15,6 +15,7 @@ categories = ["development-tools::profiling"]
 
 [dependencies]
 backtrace = "0.3.63"
+mintex = "0.1.2"
 rustc-hash = "1.1"
 lazy_static = "1.4"
 parking_lot = "0.12"
