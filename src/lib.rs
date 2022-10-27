@@ -363,7 +363,7 @@
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
-use parking_lot::Mutex;
+use mintex::Mutex;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
