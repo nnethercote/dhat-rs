@@ -363,6 +363,14 @@
 
 use backtrace::SymbolName;
 use lazy_static::lazy_static;
+// In normal Rust code, the allocator is on a lower level than the mutex
+// implementation, which means the mutex implementation can use the allocator.
+// But DHAT implements an allocator which requires a mutex. If we're not
+// careful, this can easily result in deadlocks from circular sequences of
+// operations, E.g. see #18 and #25 from when we used `parking_lot::Mutex`. We
+// now use `mintex::Mutex`, which is guaranteed to not allocate, effectively
+// making the mutex implementation on a lower level than the allocator,
+// allowing the allocator to depend on it.
 use mintex::Mutex;
 use rustc_hash::FxHashMap;
 use serde::Serialize;
@@ -376,8 +384,6 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
-// At some point I should set the MSRV to 1.63, whereupon this lazy_static can
-// be removed because `Mutex::new` is now `const`.
 lazy_static! {
     static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Ready);
 }
