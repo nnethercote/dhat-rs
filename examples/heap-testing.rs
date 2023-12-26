@@ -7,7 +7,7 @@
 // interfering with each other.
 
 #[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+static ALLOC: dhat::Alloc = dhat::Alloc::new();
 
 fn main() {
     let _profiler = dhat::Profiler::builder().testing().build();
