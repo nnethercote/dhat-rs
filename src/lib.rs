@@ -2,6 +2,13 @@
 #![deny(rustdoc::missing_doc_code_examples)]
 #![deny(missing_debug_implementations)]
 
+//! **Warning** *This crate is experimental. It relies on implementation
+//! techniques that are hard to keep working for 100% of configuratios. It may
+//! work fine for you, or it may crash, hang, or otherwise do the wrong thing.
+//! Its maintenance is not a high priority of the author. Support requests such
+//! as issues and pull requests may receive slow responses, or no response at
+//! all. Sorry!*
+//!
 //! This crate provides heap profiling and [ad hoc profiling] capabilities to
 //! Rust programs, similar to those provided by [DHAT].
 //!
@@ -20,11 +27,6 @@
 //! `dhat` also supports *heap usage testing*, where you can write tests and
 //! then check that they allocated as much heap memory as you expected. This
 //! can be useful for performance-sensitive code.
-//!
-//! **Warning: this crate is experimental and doesn't work in some
-//! configurations. Its maintenance is not a high priority of the author.
-//! Support requests such as issues and pull requests may receive slow
-//! responses, or no response at all. Sorry!**
 //!
 //! # Motivation
 //!
