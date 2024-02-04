@@ -17,6 +17,11 @@ See the [crate documentation] for details on how to use it.
 
 [crate documentation]: https://docs.rs/dhat
 
+**Warning: this crate is experimental and doesn't work in some configurations.
+Its maintenance is not a high priority of the author. Support requests such as
+issues and pull requests may receive slow responses, or no response at all.
+Sorry!**
+
 ## License
 
 Licensed under either of

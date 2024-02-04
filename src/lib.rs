@@ -21,6 +21,11 @@
 //! then check that they allocated as much heap memory as you expected. This
 //! can be useful for performance-sensitive code.
 //!
+//! **Warning: this crate is experimental and doesn't work in some
+//! configurations. Its maintenance is not a high priority of the author.
+//! Support requests such as issues and pull requests may receive slow
+//! responses, or no response at all. Sorry!**
+//!
 //! # Motivation
 //!
 //! DHAT is a powerful heap profiler that comes with Valgrind. This crate is a
