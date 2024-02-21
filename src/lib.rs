@@ -77,7 +77,7 @@
 //! #[cfg(feature = "dhat-heap")]
 //! # */
 //! #[global_allocator]
-//! static ALLOC: dhat::Alloc = dhat::Alloc;
+//! static ALLOC: dhat::Alloc = dhat::Alloc::new();
 //! ```
 //! Then add the following code to the very start of your `main` function:
 //! ```
@@ -304,7 +304,7 @@
 //! integration test within a crate's `tests/` directory:
 //! ```
 //! #[global_allocator]
-//! static ALLOC: dhat::Alloc = dhat::Alloc;
+//! static ALLOC: dhat::Alloc = dhat::Alloc::new();
 //!
 //! # // Tricky: comment out the `#[test]` because it's needed in an actual
 //! # // test but messes up things here.
@@ -1223,16 +1223,37 @@ fn new_backtrace_inner(
 /// It must be set as the global allocator (via `#[global_allocator]`) when
 /// doing heap profiling.
 #[derive(Debug)]
-pub struct Alloc;
+pub struct Alloc<A = System>(A);
 
-unsafe impl GlobalAlloc for Alloc {
+impl Alloc<System> {
+    /// Create a new [`Alloc`], wrapping the system allocator.
+    ///
+    /// Shortcut for `Alloc::from_alloc(system)`.
+    // Non-const function is not really useful here.
+    #[allow(clippy::new_without_default)]
+    pub const fn new() -> Self {
+        Self(System)
+    }
+}
+
+impl<A> Alloc<A> {
+    /// Create a new [`Alloc`], wrapping an allocator.
+    pub const fn from_alloc(alloc: A) -> Self {
+        Self(alloc)
+    }
+}
+
+unsafe impl<A> GlobalAlloc for Alloc<A>
+where
+    A: GlobalAlloc,
+{
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let ignore_allocs = IgnoreAllocs::new();
         if ignore_allocs.was_already_ignoring_allocs {
-            System.alloc(layout)
+            self.0.alloc(layout)
         } else {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-            let ptr = System.alloc(layout);
+            let ptr = self.0.alloc(layout);
             if ptr.is_null() {
                 return ptr;
             }
@@ -1253,10 +1274,10 @@ unsafe impl GlobalAlloc for Alloc {
     unsafe fn realloc(&self, old_ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let ignore_allocs = IgnoreAllocs::new();
         if ignore_allocs.was_already_ignoring_allocs {
-            System.realloc(old_ptr, layout, new_size)
+            self.0.realloc(old_ptr, layout, new_size)
         } else {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-            let new_ptr = System.realloc(old_ptr, layout, new_size);
+            let new_ptr = self.0.realloc(old_ptr, layout, new_size);
             if new_ptr.is_null() {
                 return new_ptr;
             }
@@ -1295,10 +1316,10 @@ unsafe impl GlobalAlloc for Alloc {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let ignore_allocs = IgnoreAllocs::new();
         if ignore_allocs.was_already_ignoring_allocs {
-            System.dealloc(ptr, layout)
+            self.0.dealloc(ptr, layout)
         } else {
             let phase: &mut Phase<Globals> = &mut TRI_GLOBALS.lock();
-            System.dealloc(ptr, layout);
+            self.0.dealloc(ptr, layout);
 
             if let Phase::Running(g @ Globals { heap: Some(_), .. }) = phase {
                 let size = layout.size();
