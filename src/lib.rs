@@ -1663,6 +1663,21 @@ impl HeapStats {
     }
 }
 
+impl std::ops::Sub for HeapStats {
+    type Output = HeapStats;
+
+    fn sub(self, rhs: HeapStats) -> Self::Output {
+        HeapStats {
+            total_blocks: self.total_blocks - rhs.total_blocks,
+            total_bytes: self.total_bytes - rhs.total_bytes,
+            max_blocks: self.max_blocks - rhs.max_blocks,
+            max_bytes: self.max_bytes - rhs.max_bytes,
+            curr_blocks: self.curr_blocks - rhs.curr_blocks,
+            curr_bytes: self.curr_bytes - rhs.curr_bytes,
+        }
+    }
+}
+
 impl AdHocStats {
     /// Gets the current ad hoc stats.
     ///
@@ -1683,6 +1698,17 @@ impl AdHocStats {
             Phase::PostAssert => {
                 panic!("dhat: getting ad hoc stats after the profiler has asserted")
             }
+        }
+    }
+}
+
+impl std::ops::Sub for AdHocStats {
+    type Output = AdHocStats;
+
+    fn sub(self, rhs: AdHocStats) -> Self::Output {
+        AdHocStats {
+            total_events: self.total_events - rhs.total_events,
+            total_units: self.total_units - rhs.total_units,
         }
     }
 }
