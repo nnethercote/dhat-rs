@@ -759,31 +759,33 @@ impl Globals {
             ftbl,
         };
 
-        eprintln!(
-            "dhat: Total:     {} {} in {} {}",
-            self.total_bytes.separate_with_commas(),
-            json.bsu.unwrap_or("bytes"),
-            self.total_blocks.separate_with_commas(),
-            json.bksu.unwrap_or("blocks"),
-        );
-        if let Some(h) = &self.heap {
+        // When outputting to memory, assume we should be quiet on stderr.
+        if memory_output.is_none() {
             eprintln!(
-                "dhat: At t-gmax: {} bytes in {} blocks",
-                h.max_bytes.separate_with_commas(),
-                h.max_blocks.separate_with_commas(),
+                "dhat: Total:     {} {} in {} {}",
+                self.total_bytes.separate_with_commas(),
+                json.bsu.unwrap_or("bytes"),
+                self.total_blocks.separate_with_commas(),
+                json.bksu.unwrap_or("blocks"),
             );
-            eprintln!(
-                "dhat: At t-end:  {} bytes in {} blocks",
-                h.curr_bytes.separate_with_commas(),
-                h.curr_blocks.separate_with_commas(),
-            );
+            if let Some(h) = &self.heap {
+                eprintln!(
+                    "dhat: At t-gmax: {} bytes in {} blocks",
+                    h.max_bytes.separate_with_commas(),
+                    h.max_blocks.separate_with_commas(),
+                );
+                eprintln!(
+                    "dhat: At t-end:  {} bytes in {} blocks",
+                    h.curr_bytes.separate_with_commas(),
+                    h.curr_blocks.separate_with_commas(),
+                );
+            }
         }
 
         if let Some(memory_output) = memory_output {
             // Default pretty printing is fine here, it's only used for small
             // tests.
             *memory_output = serde_json::to_string_pretty(&json).unwrap();
-            eprintln!("dhat: The data has been saved to the memory buffer");
         } else {
             let write = || -> std::io::Result<()> {
                 let buffered_file = BufWriter::new(File::create(&self.file_name)?);
@@ -967,8 +969,8 @@ impl Drop for IgnoreAllocs {
 /// Profiling starts when the first value of this type is created. Profiling
 /// stops when (a) this value is dropped or (b) a `dhat` assertion fails,
 /// whichever comes first. When that happens, profiling data may be written to
-/// file, depending on how the `Profiler` has been configured. Only one
-/// `Profiler` can be running at any point in time.
+/// file, depending on how the `Profiler` has been configured, or written
+/// to a `String`. Only one `Profiler` can be running at any point in time.
 //
 // The actual profiler state is stored in `Globals`, so it can be accessed from
 // places like `Alloc::alloc` and `ad_hoc_event()` when the `Profiler`
@@ -1360,11 +1362,15 @@ impl Profiler {
         }
     }
 
-    // For testing purposes only.
-    #[doc(hidden)]
-    pub fn drop_and_get_memory_output(&mut self) -> String {
+    /// Stop profiling and write the output to a [`String`], without
+    /// any other form of output.
+    ///
+    /// An alternative is dropping the [`Profiler`], producing output
+    /// in the previously configured manner.
+    pub fn finish_into_string(mut self) -> String {
         let mut memory_output = String::new();
         self.drop_inner(Some(&mut memory_output));
+        std::mem::forget(self);
         memory_output
     }
 }

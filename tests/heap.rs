@@ -12,12 +12,10 @@ fn main() {
     let mut v4 = vec![1u32, 2, 3, 4];
 
     let mem = {
-        let mut profiler = std::mem::ManuallyDrop::new(
-            dhat::Profiler::builder()
-                .trim_backtraces(Some(usize::MAX))
-                .eprint_json()
-                .build(),
-        );
+        let profiler = dhat::Profiler::builder()
+            .trim_backtraces(Some(usize::MAX))
+            .eprint_json()
+            .build();
 
         // Things allocated beforehand aren't counted.
         let stats = dhat::HeapStats::get();
@@ -60,7 +58,7 @@ fn main() {
         assert_eq!(stats.max_bytes, 1432);
 
         drop(v6);
-        profiler.drop_and_get_memory_output()
+        profiler.finish_into_string()
     };
 
     // Allocated before, freed after.
@@ -173,10 +171,10 @@ fn main() {
         }
     } else {
         assert!(y("alloc::vec::Vec<T,A>::push"));
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:35:9)")); // v3
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:38:18)")); // v5
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:39:22)")); // v6
-        assert!(y("heap::main (dhat-rs/tests/heap.rs:49:22)")); // _v7
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:33:9)")); // v3
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:36:18)")); // v5
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:37:22)")); // v6
+        assert!(y("heap::main (dhat-rs/tests/heap.rs:47:22)")); // _v7
     }
 
     // This stuff should be removed by backtrace trimming.
