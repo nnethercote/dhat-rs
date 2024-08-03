@@ -976,6 +976,7 @@ impl Drop for IgnoreAllocs {
 // places like `Alloc::alloc` and `ad_hoc_event()` when the `Profiler`
 // instance isn't within reach.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct Profiler;
 
 impl Profiler {
