@@ -1740,12 +1740,12 @@ where
 #[macro_export]
 macro_rules! assert {
     ($cond:expr) => ({
-        if dhat::check_assert_condition(|| $cond) {
+        if $crate::check_assert_condition(|| $cond) {
             panic!("dhat: assertion failed: {}", stringify!($cond));
         }
     });
     ($cond:expr, $($arg:tt)+) => ({
-        if dhat::check_assert_condition(|| $cond) {
+        if $crate::check_assert_condition(|| $cond) {
             panic!("dhat: assertion failed: {}: {}", stringify!($cond), format_args!($($arg)+));
         }
     });
@@ -1766,7 +1766,7 @@ macro_rules! assert {
 #[macro_export]
 macro_rules! assert_eq {
     ($left:expr, $right:expr $(,)?) => ({
-        if dhat::check_assert_condition( || $left == $right) {
+        if $crate::check_assert_condition( || $left == $right) {
             panic!(
                 "dhat: assertion failed: `(left == right)`\n  left: `{:?}`,\n right: `{:?}`",
                 $left, $right
@@ -1774,7 +1774,7 @@ macro_rules! assert_eq {
         }
     });
     ($left:expr, $right:expr, $($arg:tt)+) => ({
-        if dhat::check_assert_condition(|| $left == $right) {
+        if $crate::check_assert_condition(|| $left == $right) {
             panic!(
                 "dhat: assertion failed: `(left == right)`\n  left: `{:?}`,\n right: `{:?}`: {}",
                 $left, $right, format_args!($($arg)+)
@@ -1798,7 +1798,7 @@ macro_rules! assert_eq {
 #[macro_export]
 macro_rules! assert_ne {
     ($left:expr, $right:expr) => ({
-        if dhat::check_assert_condition(|| $left != $right) {
+        if $crate::check_assert_condition(|| $left != $right) {
             panic!(
                 "dhat: assertion failed: `(left != right)`\n  left: `{:?}`,\n right: `{:?}`",
                 $left, $right
@@ -1806,7 +1806,7 @@ macro_rules! assert_ne {
         }
     });
     ($left:expr, $right:expr, $($arg:tt)+) => ({
-        if dhat::check_assert_condition(|| $left != $right) {
+        if $crate::check_assert_condition(|| $left != $right) {
             panic!(
                 "dhat: assertion failed: `(left != right)`\n  left: `{:?}`,\n right: `{:?}`: {}",
                 $left, $right, format_args!($($arg)+)
