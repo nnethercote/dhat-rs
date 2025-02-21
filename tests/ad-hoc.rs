@@ -19,13 +19,11 @@ fn main() {
     dhat::ad_hoc_event(3);
 
     let mem = {
-        let mut profiler = std::mem::ManuallyDrop::new(
-            dhat::Profiler::builder()
-                .ad_hoc()
-                .trim_backtraces(Some(usize::MAX))
-                .eprint_json()
-                .build(),
-        );
+        let profiler = dhat::Profiler::builder()
+            .ad_hoc()
+            .trim_backtraces(Some(usize::MAX))
+            .eprint_json()
+            .build();
 
         let stats = dhat::AdHocStats::get();
         assert_eq!(stats.total_events, 0);
@@ -41,7 +39,7 @@ fn main() {
         assert_eq!(stats.total_events, 4);
         assert_eq!(stats.total_units, 106);
 
-        profiler.drop_and_get_memory_output()
+        profiler.finish_into_string()
     };
 
     // Ignored because profiling has finished.
@@ -149,8 +147,8 @@ fn main() {
         assert!(y("ad_hoc::f2 (dhat-rs/tests/ad-hoc.rs:6:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:10:5)"));
         assert!(y("ad_hoc::f1 (dhat-rs/tests/ad-hoc.rs:11:5)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:34:9)"));
-        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:35:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:32:9)"));
+        assert!(y("ad_hoc::main (dhat-rs/tests/ad-hoc.rs:33:9)"));
     }
 
     // This stuff should be removed by backtrace trimming.
