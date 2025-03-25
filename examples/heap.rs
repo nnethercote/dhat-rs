@@ -4,7 +4,7 @@
 
 //#[cfg(feature = "dhat-heap")]
 #[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+static ALLOC: dhat::Alloc = dhat::Alloc::new();
 
 fn main() {
     //#[cfg(feature = "dhat-heap")]

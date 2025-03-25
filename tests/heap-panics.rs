@@ -1,5 +1,5 @@
 #[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+static ALLOC: dhat::Alloc = dhat::Alloc::new();
 
 // Test most of the panics that can occur during heap profiling. Because we
 // can't have multiple `#[test]` instances in a single test, we use

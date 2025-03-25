@@ -1,5 +1,5 @@
 #[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+static ALLOC: dhat::Alloc = dhat::Alloc::new();
 
 fn f2() {
     dhat::ad_hoc_event(1);

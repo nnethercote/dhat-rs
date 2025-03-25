@@ -1,5 +1,5 @@
 #[global_allocator]
-static ALLOC: dhat::Alloc = dhat::Alloc;
+static ALLOC: dhat::Alloc = dhat::Alloc::new();
 
 #[test]
 #[should_panic(expected = "dhat: assertion failed: `(left != right)`\n  left: `32`,\n right: `32`")]
