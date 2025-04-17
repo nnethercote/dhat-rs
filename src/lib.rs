@@ -369,7 +369,6 @@
 //! test runner code interfering with the tests.
 
 use backtrace::SymbolName;
-use lazy_static::lazy_static;
 // In normal Rust code, the allocator is on a lower level than the mutex
 // implementation, which means the mutex implementation can use the allocator.
 // But DHAT implements an allocator which requires a mutex. If we're not
@@ -391,9 +390,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use thousands::Separable;
 
-lazy_static! {
-    static ref TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Ready);
-}
+static TRI_GLOBALS: Mutex<Phase<Globals>> = Mutex::new(Phase::Ready);
 
 // State transition diagram:
 //
