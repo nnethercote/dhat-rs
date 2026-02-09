@@ -379,7 +379,7 @@ use lazy_static::lazy_static;
 // making the mutex implementation on a lower level than the allocator,
 // allowing the allocator to depend on it.
 use mintex::Mutex;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHasher};
 use serde::Serialize;
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -689,7 +689,7 @@ impl Globals {
             .map(|(mut bt, pp_info_idx)| {
                 // Do the potentially expensive debug info lookups to get
                 // symbol names, line numbers, etc.
-                bt.0.resolve();
+                bt.inner.resolve();
 
                 // Trim boring frames at the top and bottom of the backtrace.
                 let first_symbol_to_show = if self.trim_backtraces.is_some() {
@@ -708,7 +708,7 @@ impl Globals {
                 // before.
                 let mut fs = vec![];
                 let mut i = 0;
-                for frame in bt.0.frames().iter() {
+                for frame in bt.inner.frames().iter() {
                     for symbol in frame.symbols().iter() {
                         i += 1;
                         if (i - 1) < first_symbol_to_show {
@@ -1194,8 +1194,9 @@ fn new_backtrace_inner(
     frames_to_trim: &FxHashMap<usize, TB>,
 ) -> Backtrace {
     // Get the backtrace, trimming if necessary at the top and bottom and for
-    // length.
+    // length. Also compute the hash incrementally to avoid re-hashing later.
     let mut frames = Vec::new();
+    let mut hasher = FxHasher::default();
     backtrace::trace(|frame| {
         let ip = frame.ip() as usize;
         if trim_backtraces.is_some() {
@@ -1206,6 +1207,8 @@ fn new_backtrace_inner(
             }
         }
 
+        // Hash the IP as we collect frames
+        frame.ip().hash(&mut hasher);
         frames.push(frame.clone().into());
 
         if let Some(max_frames) = trim_backtraces {
@@ -1214,7 +1217,10 @@ fn new_backtrace_inner(
             true // continue
         }
     });
-    Backtrace(frames.into())
+    Backtrace {
+        inner: frames.into(),
+        cached_hash: hasher.finish(),
+    }
 }
 
 /// A global allocator that tracks allocations and deallocations on behalf of
@@ -1378,8 +1384,15 @@ impl Drop for Profiler {
 // A wrapper for `backtrace::Backtrace` that implements `Eq` and `Hash`, which
 // only look at the frame IPs. This assumes that any two
 // `backtrace::Backtrace`s with the same frame IPs are equivalent.
+//
+// The hash is pre-computed during construction to avoid re-hashing on every
+// HashMap lookup, which is a significant performance win since backtraces
+// can have many frames.
 #[derive(Debug)]
-struct Backtrace(backtrace::Backtrace);
+struct Backtrace {
+    inner: backtrace::Backtrace,
+    cached_hash: u64,
+}
 
 impl Backtrace {
     // The top frame symbols in a backtrace (those relating to backtracing
@@ -1418,8 +1431,8 @@ impl Backtrace {
     // can be discarded.
     fn get_frames_to_trim(&self, start_bt: &Backtrace) -> FxHashMap<usize, TB> {
         let mut frames_to_trim = FxHashMap::default();
-        let frames1 = self.0.frames();
-        let frames2 = start_bt.0.frames();
+        let frames1 = self.inner.frames();
+        let frames2 = start_bt.inner.frames();
 
         let (mut i1, mut i2) = (0, 0);
         loop {
@@ -1511,7 +1524,7 @@ impl Backtrace {
     fn first_symbol_to_show<P: Fn(&str) -> bool>(&self, p: P) -> usize {
         // Get the symbols into a vector so we can reverse iterate over them.
         let symbols: Vec<_> = self
-            .0
+            .inner
             .frames()
             .iter()
             .flat_map(|f| f.symbols().iter())
@@ -1532,7 +1545,7 @@ impl Backtrace {
     // Useful for debugging.
     #[allow(dead_code)]
     fn eprint(&self) {
-        for frame in self.0.frames().iter() {
+        for frame in self.inner.frames().iter() {
             for symbol in frame.symbols().iter() {
                 eprintln!("{}", Backtrace::frame_to_string(frame, symbol));
             }
@@ -1562,8 +1575,13 @@ impl Backtrace {
 
 impl PartialEq for Backtrace {
     fn eq(&self, other: &Self) -> bool {
-        let mut frames1 = self.0.frames().iter();
-        let mut frames2 = other.0.frames().iter();
+        // Short circuit equality based on hash
+        if self.cached_hash != other.cached_hash {
+            return false;
+        }
+
+        let mut frames1 = self.inner.frames().iter();
+        let mut frames2 = other.inner.frames().iter();
         loop {
             let ip1 = frames1.next().map(|f| f.ip());
             let ip2 = frames2.next().map(|f| f.ip());
@@ -1582,9 +1600,8 @@ impl Eq for Backtrace {}
 
 impl Hash for Backtrace {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        for frame in self.0.frames().iter() {
-            frame.ip().hash(state);
-        }
+        // Use the pre-computed hash instead of re-hashing all frames.
+        self.cached_hash.hash(state);
     }
 }
 
